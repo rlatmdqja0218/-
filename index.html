@@ -1,0 +1,232 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Toolpath Loom</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body class="intro-active">
+    <div id="introScreen" class="intro-screen" aria-label="Toolpath Loom intro">
+      <canvas id="introCanvas" aria-hidden="true"></canvas>
+      <div class="intro-content">
+        <p class="intro-kicker">Parametric G-code Loom</p>
+        <h2>Toolpath Loom</h2>
+        <p class="intro-copy">프린터의 이동 경로를 정교한 직조 궤적으로 변환합니다.</p>
+        <button id="enterButton" class="intro-enter" type="button">시작하기</button>
+      </div>
+    </div>
+
+    <header class="site-header">
+      <div>
+        <p class="eyebrow">Web G-code Control Study</p>
+        <h1>Toolpath Loom</h1>
+      </div>
+      <p class="header-note">3D 프린터의 이동 궤적을 직조 패턴과 메시 구조로 변환하는 브라우저 기반 툴패스 생성기</p>
+    </header>
+
+    <main class="app-shell">
+      <section class="preview-panel" aria-label="툴패스 시각화">
+        <div class="preview-toolbar">
+          <div>
+            <span class="panel-label">Live Path Preview</span>
+            <strong id="patternTitle">직조 편향</strong>
+          </div>
+          <div class="preview-stats" aria-live="polite">
+            <span id="pathCount">0 paths</span>
+            <span id="lineLength">0 mm</span>
+          </div>
+        </div>
+        <div class="canvas-frame">
+          <canvas id="toolpathCanvas" width="1200" height="900"></canvas>
+        </div>
+      </section>
+
+      <aside class="controls-panel" aria-label="패턴 및 출력 설정">
+        <div class="settings-tabs" role="radiogroup" aria-label="설정 모드">
+          <label>
+            <input type="radio" name="settingsMode" value="basic" checked />
+            <span>기본</span>
+          </label>
+          <label>
+            <input type="radio" name="settingsMode" value="advanced" />
+            <span>고급</span>
+          </label>
+        </div>
+
+        <section class="control-group">
+          <div class="group-title">
+            <span>패턴</span>
+            <small>2D toolpath</small>
+          </div>
+          <div class="segmented" role="radiogroup" aria-label="패턴 유형">
+            <label>
+              <input type="radio" name="patternMode" value="grid" />
+              <span>격자</span>
+            </label>
+            <label>
+              <input type="radio" name="patternMode" value="weave" checked />
+              <span>직조</span>
+            </label>
+            <label>
+              <input type="radio" name="patternMode" value="mesh" />
+              <span>메시</span>
+            </label>
+          </div>
+          <div class="two-col">
+            <label class="field">
+              <span>가로 크기 (mm)</span>
+              <input data-param="width" type="number" min="20" max="250" step="1" value="120" />
+            </label>
+            <label class="field">
+              <span>세로 크기 (mm)</span>
+              <input data-param="height" type="number" min="20" max="250" step="1" value="120" />
+            </label>
+            <label class="field">
+              <span>총 출력 높이 (mm)</span>
+              <input id="totalHeight" data-param="totalHeight" type="number" min="0.05" max="40" step="0.01" value="1.12" />
+            </label>
+          </div>
+          <label class="field">
+            <span>필라멘트 프리셋</span>
+            <select id="filamentPreset">
+              <option value="custom">수동 설정</option>
+              <option value="pla">PLA</option>
+              <option value="petg">PETG</option>
+              <option value="abs">ABS</option>
+              <option value="tpu">TPU</option>
+              <option value="silkPla">Silk PLA</option>
+              <option value="carbonPla">Carbon PLA</option>
+            </select>
+          </label>
+        </section>
+
+        <section class="control-group" data-mode="advanced">
+          <div class="group-title">
+            <span>구조 밀도</span>
+            <small>geometry</small>
+          </div>
+          <label class="range-field">
+            <span>밀도</span>
+            <input data-param="density" type="range" min="0.5" max="4" step="0.1" value="1.6" />
+            <input data-param="density" type="number" min="0.5" max="4" step="0.1" value="1.6" />
+          </label>
+          <label class="range-field">
+            <span>선 간격</span>
+            <input data-param="spacing" type="range" min="1" max="20" step="0.1" value="7.5" />
+            <input data-param="spacing" type="number" min="1" max="20" step="0.1" value="7.5" />
+          </label>
+          <label class="range-field">
+            <span>교차 각도</span>
+            <input data-param="crossAngle" type="range" min="15" max="165" step="1" value="90" />
+            <input data-param="crossAngle" type="number" min="15" max="165" step="1" value="90" />
+          </label>
+          <label class="range-field">
+            <span>직조 진폭</span>
+            <input data-param="weaveAmplitude" type="range" min="0" max="5" step="0.1" value="1.4" />
+            <input data-param="weaveAmplitude" type="number" min="0" max="5" step="0.1" value="1.4" />
+          </label>
+        </section>
+
+        <section class="control-group" data-mode="advanced">
+          <div class="group-title">
+            <span>프린트 제어</span>
+            <small>motion</small>
+          </div>
+          <label class="range-field">
+            <span>이동 속도</span>
+            <input data-param="travelSpeed" type="range" min="1800" max="12000" step="100" value="7200" />
+            <input data-param="travelSpeed" type="number" min="1800" max="12000" step="100" value="7200" />
+          </label>
+          <label class="range-field">
+            <span>노즐 속도</span>
+            <input data-param="printSpeed" type="range" min="300" max="6000" step="50" value="1800" />
+            <input data-param="printSpeed" type="number" min="300" max="6000" step="50" value="1800" />
+          </label>
+          <label class="range-field">
+            <span>압출 배율</span>
+            <input data-param="extrusionMultiplier" type="range" min="0.2" max="2" step="0.01" value="0.92" />
+            <input data-param="extrusionMultiplier" type="number" min="0.2" max="2" step="0.01" value="0.92" />
+          </label>
+          <label class="range-field">
+            <span>리트랙션</span>
+            <input data-param="retractionLength" type="range" min="0" max="8" step="0.05" value="1" />
+            <input data-param="retractionLength" type="number" min="0" max="8" step="0.05" value="1" />
+          </label>
+          <label class="range-field">
+            <span>리트랙션 속도</span>
+            <input data-param="retractionSpeed" type="range" min="300" max="6000" step="50" value="1800" />
+            <input data-param="retractionSpeed" type="number" min="300" max="6000" step="50" value="1800" />
+          </label>
+          <div class="two-col">
+            <label class="field">
+              <span>레이어 높이</span>
+              <input data-param="layerHeight" type="number" min="0.05" max="1" step="0.01" value="0.28" />
+            </label>
+            <label class="field">
+              <span>레이어 수</span>
+              <input data-param="layers" type="number" min="1" max="40" step="1" value="4" />
+            </label>
+            <label class="field">
+              <span>노즐 직경</span>
+              <input data-param="nozzleDiameter" type="number" min="0.2" max="1.2" step="0.05" value="0.4" />
+            </label>
+            <label class="field">
+              <span>필라멘트</span>
+              <input data-param="filamentDiameter" type="number" min="1.5" max="3" step="0.01" value="1.75" />
+            </label>
+          </div>
+        </section>
+
+        <section class="control-group" data-mode="advanced">
+          <div class="group-title">
+            <span>안전 코드</span>
+            <small>macro preset</small>
+          </div>
+          <label class="field">
+            <span>프리셋</span>
+            <select id="macroPreset">
+              <option value="minimal">Minimal Safe Start / End</option>
+              <option value="bambu">Bambu Layer Insert</option>
+              <option value="customOnly">툴패스만 생성</option>
+            </select>
+          </label>
+          <div class="two-col">
+            <label class="field">
+              <span>베드 온도</span>
+              <input data-param="bedTemp" type="number" min="0" max="120" step="1" value="60" />
+            </label>
+            <label class="field">
+              <span>노즐 온도</span>
+              <input data-param="nozzleTemp" type="number" min="0" max="320" step="1" value="210" />
+            </label>
+            <label class="field">
+              <span>원점 X</span>
+              <input data-param="originX" type="number" min="0" max="250" step="0.1" value="60" />
+            </label>
+            <label class="field">
+              <span>원점 Y</span>
+              <input data-param="originY" type="number" min="0" max="250" step="0.1" value="60" />
+            </label>
+          </div>
+        </section>
+      </aside>
+
+      <section class="gcode-panel" aria-label="G코드 출력">
+        <div class="gcode-header">
+          <div>
+            <span class="panel-label">Generated G-code</span>
+            <strong id="gcodeSummary">ready</strong>
+          </div>
+          <div class="button-row">
+            <button id="copyButton" type="button">복사</button>
+            <button id="downloadButton" type="button" class="primary">다운로드</button>
+          </div>
+        </div>
+        <textarea id="gcodeOutput" spellcheck="false" aria-label="생성된 G코드"></textarea>
+      </section>
+    </main>
+
+    <script src="script.js"></script>
+  </body>
+</html>
