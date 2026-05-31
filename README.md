@@ -1,4 +1,4 @@
-# Toolpath Loom
+# G-CODE TOOL
 
 웹 브라우저 기반의 3D 프린팅 툴패스 시각화 및 사용자 정의 G-code 생성기입니다.
 
