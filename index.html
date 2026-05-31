@@ -17,7 +17,10 @@
         <p class="intro-kicker">Parametric G-code Control</p>
         <h2>G-CODE TOOL</h2>
         <p class="intro-copy">프린터의 이동 경로를 정교한 직조 궤적으로 변환합니다.</p>
-        <button id="enterButton" class="intro-enter" type="button">시작하기</button>
+        <div class="intro-actions" aria-label="작업 모드 선택">
+          <button id="enterGeometryMode" class="intro-enter" type="button">Pure Geometry</button>
+          <button id="enterImageMode" class="intro-enter secondary" type="button">Image Modulation</button>
+        </div>
       </div>
       <div class="intro-footer" aria-hidden="true">
         <span>WEAVE ALGORITHM</span>
@@ -55,7 +58,7 @@
         </div>
       </section>
 
-      <aside class="controls-panel" aria-label="패턴 및 출력 설정">
+      <aside id="geometryControlsPanel" class="controls-panel" aria-label="패턴 및 출력 설정">
         <div class="settings-tabs" role="radiogroup" aria-label="설정 모드">
           <label>
             <input type="radio" name="settingsMode" value="basic" checked />
@@ -118,6 +121,23 @@
           <div class="group-title">
             <span>구조 밀도</span>
             <small>geometry</small>
+          </div>
+          <div class="effect-container">
+            <h3>효과 제어</h3>
+
+            <div class="setting-group">
+              <label class="checkbox-label">
+                <input type="checkbox" id="useGradient" />
+                가변 밀도 그라데이션 활성화
+              </label>
+            </div>
+
+            <div id="gradientSliders" class="hidden">
+              <div class="setting-group">
+                <label>그라데이션 변조 강도</label>
+                <input id="gradientStrength" type="range" data-param="gradientStrength" min="0.1" max="3.0" step="0.1" value="1.0" />
+              </div>
+            </div>
           </div>
           <label class="range-field">
             <span>밀도</span>
@@ -231,6 +251,50 @@
             <label class="field">
               <span>원점 Y</span>
               <input data-param="originY" type="number" min="0" max="250" step="0.1" value="60" />
+            </label>
+          </div>
+        </section>
+      </aside>
+
+      <aside id="imageControlsPanel" class="controls-panel image-controls-panel hidden" aria-label="이미지 변조 출력 설정">
+        <section class="control-group image-mode-primary">
+          <div class="group-title">
+            <span>이미지 변조</span>
+            <small>luminance path</small>
+          </div>
+          <label class="image-upload-field" for="imageModeUploader">
+            <input type="file" id="imageModeUploader" accept="image/*" />
+            <span>이미지 업로드</span>
+            <small id="imageUploadStatus">No image source</small>
+          </label>
+          <label class="range-field">
+            <span>변조 강도</span>
+            <input id="imageStrength" data-param="imageStrength" type="range" min="0.1" max="3" step="0.1" value="1" />
+            <input data-param="imageStrength" type="number" min="0.1" max="3" step="0.1" value="1" />
+          </label>
+        </section>
+
+        <section class="control-group">
+          <div class="group-title">
+            <span>출력 영역</span>
+            <small>object size</small>
+          </div>
+          <div class="two-col">
+            <label class="field">
+              <span>가로 크기 (mm)</span>
+              <input data-param="width" type="number" min="20" max="250" step="1" value="120" />
+            </label>
+            <label class="field">
+              <span>세로 크기 (mm)</span>
+              <input data-param="height" type="number" min="20" max="250" step="1" value="120" />
+            </label>
+            <label class="field">
+              <span>총 출력 높이 (mm)</span>
+              <input data-param="totalHeight" type="number" min="0.05" max="40" step="0.01" value="1.12" />
+            </label>
+            <label class="field">
+              <span>레이어 높이</span>
+              <input data-param="layerHeight" type="number" min="0.05" max="1" step="0.01" value="0.28" />
             </label>
           </div>
         </section>

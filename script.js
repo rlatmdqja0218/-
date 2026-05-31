@@ -1,7 +1,8 @@
 const introScreen = document.querySelector("#introScreen");
 const introCanvas = document.querySelector("#introCanvas");
 const introCtx = introCanvas.getContext("2d");
-const enterButton = document.querySelector("#enterButton");
+const enterGeometryMode = document.querySelector("#enterGeometryMode");
+const enterImageMode = document.querySelector("#enterImageMode");
 const canvas = document.querySelector("#toolpathCanvas");
 const ctx = canvas.getContext("2d");
 const gcodeOutput = document.querySelector("#gcodeOutput");
@@ -9,6 +10,12 @@ const downloadButton = document.querySelector("#downloadButton");
 const copyButton = document.querySelector("#copyButton");
 const macroPreset = document.querySelector("#macroPreset");
 const filamentPreset = document.querySelector("#filamentPreset");
+const useGradientInput = document.querySelector("#useGradient");
+const gradientSliders = document.querySelector("#gradientSliders");
+const geometryControlsPanel = document.querySelector("#geometryControlsPanel");
+const imageControlsPanel = document.querySelector("#imageControlsPanel");
+const imageModeUploader = document.querySelector("#imageModeUploader");
+const imageUploadStatus = document.querySelector("#imageUploadStatus");
 const settingsModeInputs = document.querySelectorAll('input[name="settingsMode"]');
 const advancedSettingSections = document.querySelectorAll('[data-mode="advanced"]');
 const patternTitle = document.querySelector("#patternTitle");
@@ -17,6 +24,7 @@ const lineLength = document.querySelector("#lineLength");
 const gcodeSummary = document.querySelector("#gcodeSummary");
 
 const state = {
+  workspaceMode: "geometry",
   patternMode: "weave",
   width: 120,
   height: 120,
@@ -24,6 +32,9 @@ const state = {
   spacing: 7.5,
   crossAngle: 90,
   weaveAmplitude: 1.4,
+  useGradient: false,
+  gradientStrength: 1.0,
+  imageStrength: 1.0,
   travelSpeed: 7200,
   printSpeed: 1800,
   extrusionMultiplier: 0.92,
@@ -83,6 +94,7 @@ const introLines = Array.from({ length: 54 }, (_, index) => ({
 
 let introAnimationFrame = 0;
 let introIsRunning = false;
+let uploadedImage = { data: null, width: 0, height: 0, name: "" };
 
 function clamp(value, min, max) {
   return Math.min(Math.max(value, min), max);
@@ -166,7 +178,8 @@ function stopIntroAnimation() {
   }
 }
 
-function enterWorkspace() {
+function enterWorkspace(mode) {
+  setWorkspaceMode(mode);
   stopIntroAnimation();
   introScreen.classList.add("is-exiting");
   document.body.classList.remove("intro-active");
@@ -226,18 +239,29 @@ function getLineSegment(angle, offset, width, height) {
   return [unique[0], unique[unique.length - 1]];
 }
 
-function generateStraightSet(angle, spacing, width, height, phase = 0) {
+function getGradientSpacing(baseSpacing, position, maxDistance, params) {
+  if (!params.useGradient) return baseSpacing;
+
+  const normalized = maxDistance > 0 ? Math.min(Math.abs(position) / maxDistance, 1) : 0;
+  const strength = clamp(params.gradientStrength, 0.1, 3);
+  const densityFactor = 1 + strength * (1 - normalized);
+  return Math.max(0.45, baseSpacing / densityFactor);
+}
+
+function generateStraightSet(angle, spacing, width, height, phase = 0, params = state) {
   const diagonal = Math.hypot(width, height);
   const paths = [];
   let index = 0;
+  let offset = -diagonal / 2;
 
-  for (let offset = -diagonal / 2; offset <= diagonal / 2; offset += spacing) {
+  while (offset <= diagonal / 2) {
     const segment = getLineSegment(angle, offset + phase, width, height);
     if (segment) {
       if (index % 2 === 1) segment.reverse();
       paths.push({ points: segment, family: "straight" });
       index += 1;
     }
+    offset += getGradientSpacing(spacing, offset, diagonal / 2, params);
   }
 
   return paths;
@@ -251,7 +275,8 @@ function generateWeaveSet(params, spacing) {
   const period = Math.max(spacing * 2.4, 8);
   let rowIndex = 0;
 
-  for (let y = -halfH; y <= halfH; y += spacing) {
+  let y = -halfH;
+  while (y <= halfH) {
     const points = [];
     const phase = rowIndex % 2 === 0 ? 0 : Math.PI;
     for (let i = 0; i <= sampleCount; i += 1) {
@@ -262,6 +287,54 @@ function generateWeaveSet(params, spacing) {
     if (rowIndex % 2 === 1) points.reverse();
     paths.push({ points, family: "weave" });
     rowIndex += 1;
+    y += getGradientSpacing(spacing, y, halfH, params);
+  }
+
+  return paths;
+}
+
+function sampleImageBrightness(x, y, params) {
+  if (!uploadedImage.data || uploadedImage.width === 0 || uploadedImage.height === 0) return 1;
+
+  const u = clamp((x + params.width / 2) / params.width, 0, 1);
+  const v = clamp((y + params.height / 2) / params.height, 0, 1);
+  const imgX = Math.min(uploadedImage.width - 1, Math.max(0, Math.floor(u * (uploadedImage.width - 1))));
+  const imgY = Math.min(uploadedImage.height - 1, Math.max(0, Math.floor((1 - v) * (uploadedImage.height - 1))));
+  const pixelIdx = imgY * uploadedImage.width + imgX;
+  const brightness = uploadedImage.data[pixelIdx] !== undefined ? uploadedImage.data[pixelIdx] : 255;
+
+  return clamp(brightness / 255, 0, 1);
+}
+
+function generateImageModulationPaths(params, layerIndex = 0) {
+  if (!uploadedImage.data) return [];
+
+  const paths = [];
+  const halfW = params.width / 2;
+  const halfH = params.height / 2;
+  const spacing = Math.max(0.6, params.spacing / params.density);
+  const sampleCount = Math.max(36, Math.round(params.width / 2));
+  const period = Math.max(spacing * 2.4, 8);
+  const strength = clamp(params.imageStrength, 0.1, 3);
+  let rowIndex = 0;
+  let y = -halfH;
+
+  while (y <= halfH) {
+    const points = [];
+    const phase = (rowIndex % 2 === 0 ? 0 : Math.PI) + layerIndex * 0.35;
+
+    for (let i = 0; i <= sampleCount; i += 1) {
+      const x = -halfW + (params.width * i) / sampleCount;
+      const brightness = sampleImageBrightness(x, y, params);
+      const amplitude = params.weaveAmplitude * strength * brightness;
+      const wave = Math.sin((x / period) * Math.PI * 2 + phase) * amplitude;
+      points.push({ x, y: clamp(y + wave, -halfH, halfH) });
+    }
+
+    if (rowIndex % 2 === 1) points.reverse();
+    paths.push({ points, family: "image" });
+    rowIndex += 1;
+    y += spacing;
   }
 
   return paths;
@@ -298,33 +371,41 @@ function generatePaths(params, layerIndex = 0) {
 
   if (params.patternMode === "grid") {
     return [
-      ...generateStraightSet(0, spacing, params.width, params.height, layerShift),
-      ...generateStraightSet(toRadians(params.crossAngle), spacing, params.width, params.height, -layerShift),
+      ...generateStraightSet(0, spacing, params.width, params.height, layerShift, params),
+      ...generateStraightSet(toRadians(params.crossAngle), spacing, params.width, params.height, -layerShift, params),
     ];
   }
 
   if (params.patternMode === "mesh") {
     return [
-      ...generateStraightSet(0, spacing, params.width, params.height, layerShift),
-      ...generateStraightSet(toRadians(params.crossAngle), spacing * 1.18, params.width, params.height, 0),
-      ...generateStraightSet(toRadians(-params.crossAngle), spacing * 1.18, params.width, params.height, 0),
+      ...generateStraightSet(0, spacing, params.width, params.height, layerShift, params),
+      ...generateStraightSet(toRadians(params.crossAngle), spacing * 1.18, params.width, params.height, 0, params),
+      ...generateStraightSet(toRadians(-params.crossAngle), spacing * 1.18, params.width, params.height, 0, params),
     ];
   }
 
   return [
     ...generateWeaveSet(params, spacing),
-    ...generateStraightSet(toRadians(params.crossAngle), spacing * 1.65, params.width, params.height, layerShift),
+    ...generateStraightSet(toRadians(params.crossAngle), spacing * 1.65, params.width, params.height, layerShift, params),
   ];
 }
 
 function getAllLayerPaths(params) {
   const paths = [];
   for (let layer = 0; layer < params.layers; layer += 1) {
-    generatePaths(params, layer).forEach((path) => {
+    generateModePaths(params, layer).forEach((path) => {
       paths.push({ ...path, layer });
     });
   }
   return paths;
+}
+
+function generateModePaths(params, layerIndex = 0) {
+  if (params.workspaceMode === "image") {
+    return generateImageModulationPaths(params, layerIndex);
+  }
+
+  return generatePaths(params, layerIndex);
 }
 
 function getStats(paths) {
@@ -350,7 +431,7 @@ function drawPreview() {
   const centerY = height / 2;
   const halfW = (state.width * scale) / 2;
   const halfH = (state.height * scale) / 2;
-  const paths = generatePaths(state, 0);
+  const paths = generateModePaths(state, 0);
   const stats = getStats(paths);
 
   ctx.save();
@@ -374,17 +455,25 @@ function drawPreview() {
       if (pointIndex === 0) ctx.moveTo(x, y);
       else ctx.lineTo(x, y);
     });
-    ctx.strokeStyle = path.family === "weave" ? "#111111" : index % 2 ? "#555555" : "#2b5f55";
-    ctx.lineWidth = path.family === "weave" ? 1.35 : 1;
+    ctx.strokeStyle = path.family === "image" || path.family === "weave" ? "#111111" : index % 2 ? "#555555" : "#2b5f55";
+    ctx.lineWidth = path.family === "image" || path.family === "weave" ? 1.35 : 1;
     ctx.stroke();
   });
+
+  if (state.workspaceMode === "image" && !uploadedImage.data) {
+    ctx.fillStyle = "rgba(17, 17, 17, 0.42)";
+    ctx.font = "11px ui-sans-serif, system-ui";
+    ctx.textAlign = "center";
+    ctx.fillText("IMAGE SOURCE EMPTY", centerX, centerY);
+    ctx.textAlign = "start";
+  }
 
   ctx.fillStyle = "#111";
   ctx.font = "12px ui-sans-serif, system-ui";
   ctx.fillText(`${fixed(state.width, 1)} x ${fixed(state.height, 1)} mm`, centerX - halfW, centerY + halfH + 22);
   ctx.restore();
 
-  patternTitle.textContent = patternNames[state.patternMode];
+  patternTitle.textContent = state.workspaceMode === "image" ? "이미지 변조" : patternNames[state.patternMode];
   pathCount.textContent = `${paths.length} paths`;
   lineLength.textContent = `${Math.round(stats.length)} mm`;
 }
@@ -473,7 +562,8 @@ function formatEstimatedTime(minutes) {
 function generateGcode(params) {
   const lines = [
     "; Generated by G-CODE TOOL",
-    `; Pattern: ${patternNames[params.patternMode]}`,
+    `; Mode: ${params.workspaceMode === "image" ? "Image Modulation" : "Pure Geometry"}`,
+    `; Pattern: ${params.workspaceMode === "image" ? "luminance weave" : patternNames[params.patternMode]}`,
     `; Footprint: ${fixed(params.width, 1)} x ${fixed(params.height, 1)} mm`,
     `; Layers: ${fixed(params.layers, 0)}`,
     `; Layer height: ${fixed(params.layerHeight, 2)} mm`,
@@ -493,8 +583,8 @@ function generateGcode(params) {
 
   for (let layer = 0; layer < params.layers; layer += 1) {
     const z = params.layerHeight * (layer + 1);
-    let paths = generatePaths(params, layer);
-    if (layer === 0 && params.skirtCount > 0) {
+    let paths = generateModePaths(params, layer);
+    if (params.workspaceMode === "geometry" && layer === 0 && params.skirtCount > 0) {
       paths = [...generateSkirtPaths(params), ...paths];
     }
     lines.push(`;LAYER:${layer}`);
@@ -628,6 +718,78 @@ document.querySelectorAll("[data-param]").forEach((input) => {
   input.addEventListener("input", handleParamInput);
 });
 
+useGradientInput.addEventListener("change", () => {
+  state.useGradient = useGradientInput.checked;
+  gradientSliders.classList.toggle("hidden", !state.useGradient);
+  render();
+});
+
+function clearImageModulationData() {
+  uploadedImage = { data: null, width: 0, height: 0, name: "" };
+  imageUploadStatus.textContent = "No image source";
+}
+
+function loadImageModulationFile(file) {
+  const reader = new FileReader();
+  reader.addEventListener("load", () => {
+    const image = new Image();
+    image.addEventListener("load", () => {
+      const imageCanvas = document.createElement("canvas");
+      const imageContext = imageCanvas.getContext("2d");
+      const width = image.naturalWidth || image.width;
+      const height = image.naturalHeight || image.height;
+      imageCanvas.width = width;
+      imageCanvas.height = height;
+      imageContext.drawImage(image, 0, 0, width, height);
+
+      const pixels = imageContext.getImageData(0, 0, width, height).data;
+      const luminance = new Uint8Array(width * height);
+      for (let i = 0, j = 0; i < pixels.length; i += 4, j += 1) {
+        luminance[j] = Math.round(pixels[i] * 0.299 + pixels[i + 1] * 0.587 + pixels[i + 2] * 0.114);
+      }
+
+      uploadedImage = { data: luminance, width, height, name: file.name || "Pasted image" };
+      imageUploadStatus.textContent = `${uploadedImage.name} / ${width} x ${height}`;
+      render();
+    });
+    image.src = reader.result;
+  });
+  reader.readAsDataURL(file);
+}
+
+imageModeUploader.addEventListener("change", () => {
+  const file = imageModeUploader.files && imageModeUploader.files[0];
+  if (!file) {
+    clearImageModulationData();
+    render();
+    return;
+  }
+
+  loadImageModulationFile(file);
+});
+
+window.addEventListener("paste", (event) => {
+  if (state.workspaceMode !== "image") return;
+
+  const items = event.clipboardData && Array.from(event.clipboardData.items || []);
+  const imageItem = items.find((item) => item.type.startsWith("image/"));
+  if (!imageItem) return;
+
+  const file = imageItem.getAsFile();
+  if (!file) return;
+
+  event.preventDefault();
+  loadImageModulationFile(file);
+});
+
+function setWorkspaceMode(mode) {
+  state.workspaceMode = mode;
+  geometryControlsPanel.classList.toggle("hidden", mode !== "geometry");
+  imageControlsPanel.classList.toggle("hidden", mode !== "image");
+  document.body.dataset.workspaceMode = mode;
+  render();
+}
+
 function setSettingsMode(mode) {
   advancedSettingSections.forEach((section) => {
     section.classList.toggle("hidden", mode === "basic");
@@ -662,8 +824,9 @@ downloadButton.addEventListener("click", () => {
   const blob = new Blob([result.text], { type: "text/plain;charset=utf-8" });
   const link = document.createElement("a");
   const timestamp = new Date().toISOString().slice(0, 19).replaceAll(":", "-");
+  const modeSlug = state.workspaceMode === "image" ? "image-modulation" : state.patternMode;
   link.href = URL.createObjectURL(blob);
-  link.download = `g-code-tool-${state.patternMode}-${timestamp}.gcode`;
+  link.download = `g-code-tool-${modeSlug}-${timestamp}.gcode`;
   document.body.append(link);
   link.click();
   link.remove();
@@ -684,7 +847,8 @@ copyButton.addEventListener("click", async () => {
   }, 1200);
 });
 
-enterButton.addEventListener("click", enterWorkspace);
+enterGeometryMode.addEventListener("click", () => enterWorkspace("geometry"));
+enterImageMode.addEventListener("click", () => enterWorkspace("image"));
 
 window.addEventListener("resize", () => {
   drawPreview();
