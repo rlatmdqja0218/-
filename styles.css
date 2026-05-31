@@ -11,6 +11,9 @@
   --accent-soft: #e6efec;
   --field: #fbfbfb;
   --shadow: 0 18px 46px rgba(0, 0, 0, 0.055);
+  --rail-left: 24px;
+  --rail-space: clamp(104px, 9.5vw, 128px);
+  --page-right: clamp(22px, 4vw, 56px);
 }
 
 * {
@@ -175,12 +178,14 @@ textarea {
   color: #fff;
 }
 
+body.intro-active .mode-switcher,
 body.intro-active .site-header,
 body.intro-active .app-shell {
   opacity: 0;
   pointer-events: none;
 }
 
+.mode-switcher,
 .site-header,
 .app-shell {
   transition:
@@ -189,12 +194,78 @@ body.intro-active .app-shell {
 }
 
 .site-header {
+  position: relative;
   display: flex;
   align-items: end;
   justify-content: space-between;
   gap: 32px;
-  padding: 28px clamp(22px, 4vw, 56px) 18px;
-  border-bottom: 1px solid var(--line);
+  padding: 28px var(--page-right) 18px var(--rail-space);
+  border-bottom: 0;
+}
+
+.site-header::after {
+  position: absolute;
+  right: var(--page-right);
+  bottom: 0;
+  left: var(--rail-space);
+  height: 1px;
+  background: var(--line);
+  content: "";
+}
+
+.mode-switcher {
+  position: fixed;
+  top: 24px;
+  left: var(--rail-left);
+  z-index: 8;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 54px;
+  padding: 6px;
+  border: 1px solid rgba(17, 17, 17, 0.08);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.94);
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.045);
+}
+
+.mode-switch {
+  display: grid;
+  place-items: center;
+  width: 40px;
+  min-width: 40px;
+  height: 40px;
+  min-height: 40px;
+  border-color: var(--line);
+  border-radius: 6px;
+  background: #f2f2f2;
+  padding: 0;
+  color: var(--muted);
+  letter-spacing: 0.14em;
+}
+
+.mode-switch span {
+  display: block;
+  padding-left: 0.14em;
+  font-size: 9px;
+  font-weight: 800;
+  line-height: 1;
+}
+
+.mode-switch.active {
+  border-color: var(--ink);
+  background: var(--ink);
+  color: #fff;
+}
+
+.mode-switch:hover {
+  background: var(--accent-soft);
+  color: var(--ink);
+}
+
+.mode-switch.active:hover {
+  background: var(--ink);
+  color: #fff;
 }
 
 .eyebrow,
@@ -247,7 +318,7 @@ h1 {
   grid-template-columns: minmax(0, 1fr) minmax(320px, 420px);
   grid-template-rows: minmax(560px, calc(100vh - 204px)) minmax(260px, 34vh);
   gap: 18px;
-  padding: 18px clamp(22px, 4vw, 56px) 42px;
+  padding: 18px var(--page-right) 42px var(--rail-space);
 }
 
 .preview-panel,
@@ -586,6 +657,11 @@ h1 {
   align-items: center;
 }
 
+.range-field.compact {
+  grid-template-columns: 62px minmax(0, 1fr) 66px;
+  margin-bottom: 10px;
+}
+
 .range-field span {
   color: var(--ink);
 }
@@ -756,8 +832,27 @@ button.primary:hover {
 }
 
 @media (max-width: 640px) {
+  :root {
+    --rail-left: 16px;
+    --rail-space: 82px;
+    --page-right: 12px;
+  }
+
   .site-header {
     padding-top: 24px;
+  }
+
+  .mode-switcher {
+    top: 20px;
+    width: 50px;
+    padding: 6px;
+  }
+
+  .mode-switch {
+    width: 36px;
+    min-width: 36px;
+    height: 36px;
+    min-height: 36px;
   }
 
   .intro-meta,
@@ -777,7 +872,7 @@ button.primary:hover {
   }
 
   .app-shell {
-    padding-inline: 12px;
+    padding-inline: var(--rail-space) var(--page-right);
   }
 
   .preview-toolbar,

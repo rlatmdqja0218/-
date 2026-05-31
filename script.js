@@ -12,10 +12,13 @@ const macroPreset = document.querySelector("#macroPreset");
 const filamentPreset = document.querySelector("#filamentPreset");
 const useGradientInput = document.querySelector("#useGradient");
 const gradientSliders = document.querySelector("#gradientSliders");
+const useZModInput = document.querySelector("#useZMod");
+const zModSliders = document.querySelector("#zModSliders");
 const geometryControlsPanel = document.querySelector("#geometryControlsPanel");
 const imageControlsPanel = document.querySelector("#imageControlsPanel");
 const imageModeUploader = document.querySelector("#imageModeUploader");
 const imageUploadStatus = document.querySelector("#imageUploadStatus");
+const modeSwitchButtons = document.querySelectorAll("[data-workspace-mode]");
 const settingsModeInputs = document.querySelectorAll('input[name="settingsMode"]');
 const advancedSettingSections = document.querySelectorAll('[data-mode="advanced"]');
 const patternTitle = document.querySelector("#patternTitle");
@@ -34,6 +37,9 @@ const state = {
   weaveAmplitude: 1.4,
   useGradient: false,
   gradientStrength: 1.0,
+  useZMod: false,
+  zModAmplitude: 0.15,
+  zModFrequency: 0.5,
   imageStrength: 1.0,
   travelSpeed: 7200,
   printSpeed: 1800,
@@ -293,8 +299,10 @@ function generateWeaveSet(params, spacing) {
   return paths;
 }
 
-function sampleImageBrightness(x, y, params) {
-  if (!uploadedImage.data || uploadedImage.width === 0 || uploadedImage.height === 0) return 1;
+function getImageSample(x, y, params) {
+  if (!uploadedImage.data || uploadedImage.width === 0 || uploadedImage.height === 0) {
+    return { brightness: 1, imgX: 0, imgY: 0 };
+  }
 
   const u = clamp((x + params.width / 2) / params.width, 0, 1);
   const v = clamp((y + params.height / 2) / params.height, 0, 1);
@@ -303,7 +311,24 @@ function sampleImageBrightness(x, y, params) {
   const pixelIdx = imgY * uploadedImage.width + imgX;
   const brightness = uploadedImage.data[pixelIdx] !== undefined ? uploadedImage.data[pixelIdx] : 255;
 
-  return clamp(brightness / 255, 0, 1);
+  return { brightness: clamp(brightness / 255, 0, 1), imgX, imgY };
+}
+
+function sampleImageBrightness(x, y, params) {
+  return getImageSample(x, y, params).brightness;
+}
+
+function getRowBrightness(y, params) {
+  if (!uploadedImage.data) return 1;
+
+  const samples = 18;
+  let total = 0;
+  for (let i = 0; i < samples; i += 1) {
+    const x = -params.width / 2 + (params.width * i) / Math.max(samples - 1, 1);
+    total += sampleImageBrightness(x, y, params);
+  }
+
+  return total / samples;
 }
 
 function generateImageModulationPaths(params, layerIndex = 0) {
@@ -313,28 +338,70 @@ function generateImageModulationPaths(params, layerIndex = 0) {
   const halfW = params.width / 2;
   const halfH = params.height / 2;
   const spacing = Math.max(0.6, params.spacing / params.density);
-  const sampleCount = Math.max(36, Math.round(params.width / 2));
+  const baseStep = Math.max(0.85, spacing * 0.42);
   const period = Math.max(spacing * 2.4, 8);
   const strength = clamp(params.imageStrength, 0.1, 3);
+  const darkCutoff = clamp(0.22 - strength * 0.035, 0.08, 0.24);
   let rowIndex = 0;
   let y = -halfH;
 
   while (y <= halfH) {
-    const points = [];
+    const rowBrightness = getRowBrightness(y, params);
     const phase = (rowIndex % 2 === 0 ? 0 : Math.PI) + layerIndex * 0.35;
+    const rowStep = spacing / (0.72 + rowBrightness * strength * 0.55);
+    let points = [];
+    let pointIndex = 0;
+    let x = -halfW;
+    const pushLine = () => {
+      if (points.length <= 1) return;
+      const linePoints = rowIndex % 2 === 1 ? [...points].reverse() : [...points];
+      paths.push({ points: linePoints, family: "imageLine" });
+    };
 
-    for (let i = 0; i <= sampleCount; i += 1) {
-      const x = -halfW + (params.width * i) / sampleCount;
-      const brightness = sampleImageBrightness(x, y, params);
+    while (x <= halfW) {
+      const { brightness } = getImageSample(x, y, params);
+      const visible = brightness > darkCutoff;
+      const localStep = baseStep / (0.55 + brightness * strength * 0.9);
+
+      if (!visible) {
+        pushLine();
+        points = [];
+        x += baseStep * 1.15;
+        pointIndex += 1;
+        continue;
+      }
+
       const amplitude = params.weaveAmplitude * strength * brightness;
       const wave = Math.sin((x / period) * Math.PI * 2 + phase) * amplitude;
-      points.push({ x, y: clamp(y + wave, -halfH, halfH) });
+      const point = {
+        x,
+        y: clamp(y + wave, -halfH, halfH),
+        brightness,
+        radius: 0.45 + brightness * strength * 0.5,
+      };
+      points.push(point);
+
+      if (brightness > 0.62) {
+        const cadence = Math.max(3, Math.round(8 - brightness * strength * 2));
+        if ((rowIndex * 19 + pointIndex * 7 + layerIndex * 5) % cadence === 0) {
+          const dotLength = clamp(params.nozzleDiameter * (1.5 + brightness * strength), 0.55, spacing * 0.8);
+          paths.push({
+            points: [
+              { x: clamp(x - dotLength / 2, -halfW, halfW), y: point.y, brightness, radius: point.radius },
+              { x: clamp(x + dotLength / 2, -halfW, halfW), y: point.y, brightness, radius: point.radius },
+            ],
+            family: "imageDot",
+          });
+        }
+      }
+
+      x += clamp(localStep, 0.45, baseStep * 1.8);
+      pointIndex += 1;
     }
 
-    if (rowIndex % 2 === 1) points.reverse();
-    paths.push({ points, family: "image" });
+    pushLine();
     rowIndex += 1;
-    y += spacing;
+    y += clamp(rowStep, spacing * 0.38, spacing * 1.35);
   }
 
   return paths;
@@ -455,9 +522,26 @@ function drawPreview() {
       if (pointIndex === 0) ctx.moveTo(x, y);
       else ctx.lineTo(x, y);
     });
-    ctx.strokeStyle = path.family === "image" || path.family === "weave" ? "#111111" : index % 2 ? "#555555" : "#2b5f55";
-    ctx.lineWidth = path.family === "image" || path.family === "weave" ? 1.35 : 1;
+    if (path.family === "imageLine" || path.family === "imageDot") {
+      const brightness = path.points.reduce((total, point) => total + (point.brightness || 0.7), 0) / path.points.length;
+      ctx.strokeStyle = brightness > 0.78 ? "#111111" : brightness > 0.45 ? "#4b4b4b" : "#7c8277";
+      ctx.lineWidth = path.family === "imageDot" ? clamp(1.2 + brightness * 1.8, 1.2, 3) : clamp(0.55 + brightness * 1.45, 0.55, 2.2);
+      ctx.lineCap = "round";
+    } else {
+      ctx.strokeStyle = path.family === "weave" ? "#111111" : index % 2 ? "#555555" : "#2b5f55";
+      ctx.lineWidth = path.family === "weave" ? 1.35 : 1;
+      ctx.lineCap = "butt";
+    }
     ctx.stroke();
+
+    if (path.family === "imageDot") {
+      const point = path.points[0];
+      const brightness = point.brightness || 0.8;
+      ctx.beginPath();
+      ctx.fillStyle = brightness > 0.78 ? "#111111" : "#545454";
+      ctx.arc(centerX + point.x * scale, centerY - point.y * scale, clamp((point.radius || 0.8) * scale, 1, 3.8), 0, Math.PI * 2);
+      ctx.fill();
+    }
   });
 
   if (state.workspaceMode === "image" && !uploadedImage.data) {
@@ -545,6 +629,13 @@ function getRetractionMove(params, direction) {
   return `G1 E${fixed(length, 4)} F${fixed(params.retractionSpeed, 0)}`;
 }
 
+function getZModulatedHeight(baseZ, distanceAlongPath, params) {
+  const amplitude = clamp(params.zModAmplitude, 0.05, 0.6);
+  const frequency = clamp(params.zModFrequency, 0.1, 2);
+  const phase = (distanceAlongPath / 10) * frequency * Math.PI * 2;
+  return Math.max(params.layerHeight, baseZ + Math.sin(phase) * amplitude);
+}
+
 function formatEstimatedTime(minutes) {
   if (!Number.isFinite(minutes) || minutes <= 0) return "0분";
 
@@ -583,6 +674,7 @@ function generateGcode(params) {
 
   for (let layer = 0; layer < params.layers; layer += 1) {
     const z = params.layerHeight * (layer + 1);
+    let currentZ = z;
     let paths = generateModePaths(params, layer);
     if (params.workspaceMode === "geometry" && layer === 0 && params.skirtCount > 0) {
       paths = [...generateSkirtPaths(params), ...paths];
@@ -591,10 +683,18 @@ function generateGcode(params) {
     lines.push("G92 E0");
     lines.push(`;Z:${fixed(z, 3)}`);
     lines.push(`G1 Z${fixed(z)} F600`);
+    currentZ = z;
 
     paths.forEach((path, pathIndex) => {
+      if (!path.points || path.points.length < 2) return;
+
       const start = pointToMachine(path.points[0], params);
+      const usePathZMod = params.useZMod && path.family !== "skirt";
       lines.push(`; path ${pathIndex + 1} / ${paths.length}`);
+      if (params.useZMod && Math.abs(currentZ - z) > 0.0001) {
+        lines.push(`G1 Z${fixed(z)} F600 ; reset Z modulation before travel`);
+        currentZ = z;
+      }
       if (hasPrintedPath && shouldRetract) {
         lines.push(getRetractionMove(params, -1));
         retractionCount += 1;
@@ -607,17 +707,27 @@ function generateGcode(params) {
         lines.push(getRetractionMove(params, 1));
       }
 
+      let pathDistance = 0;
       for (let i = 1; i < path.points.length; i += 1) {
         const prev = pointToMachine(path.points[i - 1], params);
         const next = pointToMachine(path.points[i], params);
         const distance = Math.hypot(next.x - prev.x, next.y - prev.y);
         const extrusion = extrusionForDistance(distance, params);
+        pathDistance += distance;
+        const nextZ = usePathZMod ? getZModulatedHeight(z, pathDistance, params) : z;
         totalExtrusion += extrusion;
         totalPrintDistance += distance;
         totalMoves += 1;
-        lines.push(
-          `G1 X${fixed(next.x)} Y${fixed(next.y)} E${fixed(extrusion, 5)} F${fixed(params.printSpeed, 0)}`
-        );
+        if (usePathZMod) {
+          lines.push(
+            `G1 X${fixed(next.x)} Y${fixed(next.y)} Z${fixed(nextZ)} E${fixed(extrusion, 5)} F${fixed(params.printSpeed, 0)}`
+          );
+        } else {
+          lines.push(
+            `G1 X${fixed(next.x)} Y${fixed(next.y)} E${fixed(extrusion, 5)} F${fixed(params.printSpeed, 0)}`
+          );
+        }
+        currentZ = nextZ;
       }
       currentPosition = pointToMachine(path.points[path.points.length - 1], params);
       hasPrintedPath = true;
@@ -724,6 +834,12 @@ useGradientInput.addEventListener("change", () => {
   render();
 });
 
+useZModInput.addEventListener("change", () => {
+  state.useZMod = useZModInput.checked;
+  zModSliders.classList.toggle("hidden", !state.useZMod);
+  render();
+});
+
 function clearImageModulationData() {
   uploadedImage = { data: null, width: 0, height: 0, name: "" };
   imageUploadStatus.textContent = "No image source";
@@ -786,6 +902,11 @@ function setWorkspaceMode(mode) {
   state.workspaceMode = mode;
   geometryControlsPanel.classList.toggle("hidden", mode !== "geometry");
   imageControlsPanel.classList.toggle("hidden", mode !== "image");
+  modeSwitchButtons.forEach((button) => {
+    const isActive = button.dataset.workspaceMode === mode;
+    button.classList.toggle("active", isActive);
+    button.setAttribute("aria-pressed", String(isActive));
+  });
   document.body.dataset.workspaceMode = mode;
   render();
 }
@@ -816,6 +937,12 @@ filamentPreset.addEventListener("change", () => {
 settingsModeInputs.forEach((input) => {
   input.addEventListener("change", () => {
     if (input.checked) setSettingsMode(input.value);
+  });
+});
+
+modeSwitchButtons.forEach((button) => {
+  button.addEventListener("click", () => {
+    setWorkspaceMode(button.dataset.workspaceMode);
   });
 });
 
