@@ -19,6 +19,7 @@ const imageControlsPanel = document.querySelector("#imageControlsPanel");
 const imageModeUploader = document.querySelector("#imageModeUploader");
 const imageUploadStatus = document.querySelector("#imageUploadStatus");
 const modeSwitchButtons = document.querySelectorAll("[data-workspace-mode]");
+const viewModeButtons = document.querySelectorAll("[data-view-mode]");
 const settingsModeInputs = document.querySelectorAll('input[name="settingsMode"]');
 const advancedSettingSections = document.querySelectorAll('[data-mode="advanced"]');
 const patternTitle = document.querySelector("#patternTitle");
@@ -28,6 +29,7 @@ const gcodeSummary = document.querySelector("#gcodeSummary");
 
 const state = {
   workspaceMode: "geometry",
+  viewMode: "top",
   patternMode: "weave",
   width: 120,
   height: 120,
@@ -44,6 +46,7 @@ const state = {
   travelSpeed: 7200,
   printSpeed: 1800,
   extrusionMultiplier: 0.92,
+  fanSpeed: 255,
   retractionLength: 1.0,
   retractionSpeed: 1800,
   layerHeight: 0.28,
@@ -56,8 +59,8 @@ const state = {
   skirtDistance: 5.0,
   bedTemp: 60,
   nozzleTemp: 210,
-  originX: 60,
-  originY: 60,
+  originX: 128,
+  originY: 128,
   macroPreset: "minimal",
   filamentPreset: "custom",
 };
@@ -69,15 +72,15 @@ const patternNames = {
 };
 
 const filamentPresets = {
-  pla: { nozzleTemp: 220, bedTemp: 55, printSpeed: 1800, extrusionMultiplier: 0.98, filamentDensity: 1.24 },
-  petg: { nozzleTemp: 255, bedTemp: 70, printSpeed: 1200, extrusionMultiplier: 0.93, filamentDensity: 1.27 },
-  abs: { nozzleTemp: 260, bedTemp: 90, printSpeed: 2100, extrusionMultiplier: 0.95, filamentDensity: 1.04 },
-  tpu: { nozzleTemp: 230, bedTemp: 35, printSpeed: 720, extrusionMultiplier: 1.02, filamentDensity: 1.21 },
-  silkPla: { nozzleTemp: 230, bedTemp: 55, printSpeed: 1200, extrusionMultiplier: 0.97, filamentDensity: 1.24 },
-  carbonPla: { nozzleTemp: 235, bedTemp: 55, printSpeed: 1600, extrusionMultiplier: 0.95, filamentDensity: 1.3 },
+  pla: { nozzleTemp: 220, bedTemp: 55, printSpeed: 1800, extrusionMultiplier: 0.98, filamentDensity: 1.24, fanSpeed: 255 },
+  petg: { nozzleTemp: 255, bedTemp: 70, printSpeed: 1200, extrusionMultiplier: 0.93, filamentDensity: 1.27, fanSpeed: 102 },
+  abs: { nozzleTemp: 260, bedTemp: 90, printSpeed: 2100, extrusionMultiplier: 0.95, filamentDensity: 1.04, fanSpeed: 0 },
+  tpu: { nozzleTemp: 230, bedTemp: 35, printSpeed: 720, extrusionMultiplier: 1.02, filamentDensity: 1.21, fanSpeed: 128 },
+  silkPla: { nozzleTemp: 230, bedTemp: 55, printSpeed: 1200, extrusionMultiplier: 0.97, filamentDensity: 1.24, fanSpeed: 255 },
+  carbonPla: { nozzleTemp: 235, bedTemp: 55, printSpeed: 1600, extrusionMultiplier: 0.95, filamentDensity: 1.3, fanSpeed: 153 },
 };
 
-const filamentPresetParams = ["nozzleTemp", "bedTemp", "printSpeed", "extrusionMultiplier", "filamentDensity"];
+const filamentPresetParams = ["nozzleTemp", "bedTemp", "printSpeed", "extrusionMultiplier", "filamentDensity", "fanSpeed"];
 const introPalette = [
   "rgba(17, 17, 17, 0.52)",
   "rgba(85, 85, 85, 0.38)",
@@ -245,6 +248,29 @@ function getLineSegment(angle, offset, width, height) {
   return [unique[0], unique[unique.length - 1]];
 }
 
+function subdividePolyline(points, maxStep = 1) {
+  if (points.length < 2) return points;
+
+  const subdivided = [points[0]];
+  for (let i = 1; i < points.length; i += 1) {
+    const start = points[i - 1];
+    const end = points[i];
+    const distance = Math.hypot(end.x - start.x, end.y - start.y);
+    const steps = Math.max(1, Math.ceil(distance / maxStep));
+
+    for (let step = 1; step <= steps; step += 1) {
+      const t = step / steps;
+      subdivided.push({
+        ...end,
+        x: start.x + (end.x - start.x) * t,
+        y: start.y + (end.y - start.y) * t,
+      });
+    }
+  }
+
+  return subdivided;
+}
+
 function getGradientSpacing(baseSpacing, position, maxDistance, params) {
   if (!params.useGradient) return baseSpacing;
 
@@ -259,12 +285,17 @@ function generateStraightSet(angle, spacing, width, height, phase = 0, params = 
   const paths = [];
   let index = 0;
   let offset = -diagonal / 2;
+  const shouldSubdivide = params.useZMod === true;
+  const subdivisionStep = 2.5;
 
   while (offset <= diagonal / 2) {
     const segment = getLineSegment(angle, offset + phase, width, height);
     if (segment) {
       if (index % 2 === 1) segment.reverse();
-      paths.push({ points: segment, family: "straight" });
+      paths.push({
+        points: shouldSubdivide ? subdividePolyline(segment, subdivisionStep) : segment,
+        family: "straight",
+      });
       index += 1;
     }
     offset += getGradientSpacing(spacing, offset, diagonal / 2, params);
@@ -277,7 +308,7 @@ function generateWeaveSet(params, spacing) {
   const paths = [];
   const halfW = params.width / 2;
   const halfH = params.height / 2;
-  const sampleCount = Math.max(18, Math.round(params.width / 3));
+  const sampleCount = Math.max(18, Math.round(params.width));
   const period = Math.max(spacing * 2.4, 8);
   let rowIndex = 0;
 
@@ -481,6 +512,30 @@ function getStats(paths) {
   return { length, moves };
 }
 
+function getPreviewZHeight(point, path, pointIndex, params) {
+  if (!params.useZMod || path.family === "skirt") return 0;
+
+  const baseZ = params.layerHeight;
+  return getZModulatedHeight(baseZ, point, params) - baseZ;
+}
+
+function projectPreviewPoint(point, path, pointIndex, params, centerX, centerY, scale) {
+  if (params.viewMode === "iso") {
+    const isoX = (point.x - point.y) * Math.cos(Math.PI / 6);
+    const isoY = (point.x + point.y) * Math.sin(Math.PI / 6);
+    const zModHeight = getPreviewZHeight(point, path, pointIndex, params);
+    return {
+      x: centerX + isoX * scale,
+      y: centerY + (isoY - zModHeight * 24) * scale,
+    };
+  }
+
+  return {
+    x: centerX + point.x * scale,
+    y: centerY - point.y * scale,
+  };
+}
+
 function drawPreview() {
   const rect = canvas.getBoundingClientRect();
   const dpr = window.devicePixelRatio || 1;
@@ -493,9 +548,13 @@ function drawPreview() {
   ctx.clearRect(0, 0, width, height);
 
   const margin = 38;
-  const scale = Math.min((width - margin * 2) / state.width, (height - margin * 2) / state.height);
+  const projectedWidth = state.viewMode === "iso" ? (state.width + state.height) * Math.cos(Math.PI / 6) : state.width;
+  const projectedHeight =
+    state.viewMode === "iso" ? (state.width + state.height) * Math.sin(Math.PI / 6) + state.zModAmplitude * 24 : state.height;
+  const baseScale = Math.min((width - margin * 2) / projectedWidth, (height - margin * 2) / projectedHeight);
+  const scale = state.viewMode === "iso" ? baseScale * 0.8 : baseScale;
   const centerX = width / 2;
-  const centerY = height / 2;
+  const centerY = state.viewMode === "iso" ? height / 2 + 42 : height / 2;
   const halfW = (state.width * scale) / 2;
   const halfH = (state.height * scale) / 2;
   const paths = generateModePaths(state, 0);
@@ -504,23 +563,39 @@ function drawPreview() {
   ctx.save();
   ctx.strokeStyle = "#d0d0d0";
   ctx.lineWidth = 1;
-  ctx.strokeRect(centerX - halfW, centerY - halfH, halfW * 2, halfH * 2);
+  if (state.viewMode === "iso") {
+    const footprint = [
+      { x: -state.width / 2, y: -state.height / 2 },
+      { x: state.width / 2, y: -state.height / 2 },
+      { x: state.width / 2, y: state.height / 2 },
+      { x: -state.width / 2, y: state.height / 2 },
+      { x: -state.width / 2, y: -state.height / 2 },
+    ].map((point) => projectPreviewPoint(point, { family: "footprint" }, 0, { ...state, useZMod: false }, centerX, centerY, scale));
 
-  ctx.beginPath();
-  ctx.moveTo(centerX - halfW, centerY);
-  ctx.lineTo(centerX + halfW, centerY);
-  ctx.moveTo(centerX, centerY - halfH);
-  ctx.lineTo(centerX, centerY + halfH);
-  ctx.strokeStyle = "#e5e5e5";
-  ctx.stroke();
+    ctx.beginPath();
+    footprint.forEach((point, index) => {
+      if (index === 0) ctx.moveTo(point.x, point.y);
+      else ctx.lineTo(point.x, point.y);
+    });
+    ctx.stroke();
+  } else {
+    ctx.strokeRect(centerX - halfW, centerY - halfH, halfW * 2, halfH * 2);
+
+    ctx.beginPath();
+    ctx.moveTo(centerX - halfW, centerY);
+    ctx.lineTo(centerX + halfW, centerY);
+    ctx.moveTo(centerX, centerY - halfH);
+    ctx.lineTo(centerX, centerY + halfH);
+    ctx.strokeStyle = "#e5e5e5";
+    ctx.stroke();
+  }
 
   paths.forEach((path, index) => {
     ctx.beginPath();
     path.points.forEach((point, pointIndex) => {
-      const x = centerX + point.x * scale;
-      const y = centerY - point.y * scale;
-      if (pointIndex === 0) ctx.moveTo(x, y);
-      else ctx.lineTo(x, y);
+      const projected = projectPreviewPoint(point, path, pointIndex, state, centerX, centerY, scale);
+      if (pointIndex === 0) ctx.moveTo(projected.x, projected.y);
+      else ctx.lineTo(projected.x, projected.y);
     });
     if (path.family === "imageLine" || path.family === "imageDot") {
       const brightness = path.points.reduce((total, point) => total + (point.brightness || 0.7), 0) / path.points.length;
@@ -536,10 +611,11 @@ function drawPreview() {
 
     if (path.family === "imageDot") {
       const point = path.points[0];
+      const projected = projectPreviewPoint(point, path, 0, state, centerX, centerY, scale);
       const brightness = point.brightness || 0.8;
       ctx.beginPath();
       ctx.fillStyle = brightness > 0.78 ? "#111111" : "#545454";
-      ctx.arc(centerX + point.x * scale, centerY - point.y * scale, clamp((point.radius || 0.8) * scale, 1, 3.8), 0, Math.PI * 2);
+      ctx.arc(projected.x, projected.y, clamp((point.radius || 0.8) * scale, 1, 3.8), 0, Math.PI * 2);
       ctx.fill();
     }
   });
@@ -554,7 +630,11 @@ function drawPreview() {
 
   ctx.fillStyle = "#111";
   ctx.font = "12px ui-sans-serif, system-ui";
-  ctx.fillText(`${fixed(state.width, 1)} x ${fixed(state.height, 1)} mm`, centerX - halfW, centerY + halfH + 22);
+  ctx.fillText(
+    `${fixed(state.width, 1)} x ${fixed(state.height, 1)} mm`,
+    state.viewMode === "iso" ? margin : centerX - halfW,
+    state.viewMode === "iso" ? height - margin * 0.62 : centerY + halfH + 22
+  );
   ctx.restore();
 
   patternTitle.textContent = state.workspaceMode === "image" ? "이미지 변조" : patternNames[state.patternMode];
@@ -596,18 +676,19 @@ function getEndMacro(params) {
     return ["G92 E0", "M400 ; wait for moves to finish", "; end of insert block"];
   }
 
-  const safeZ = fixed(params.layerHeight * params.layers + 8);
   return [
     "; Minimal safe end macro",
-    "M400",
-    "G92 E0",
-    "G1 E-1 F1800",
-    `G1 Z${safeZ} F900`,
-    "M104 S0",
-    "M140 S0",
-    "M106 S0",
-    "G1 X0 Y0 F6000",
-    "M84",
+    "M400 ; wait for moves to finish",
+    "G92 E0 ; reset extrusion distance",
+    "G1 E-1 F1800 ; retract filament",
+    "G91 ; switch to relative positioning",
+    "G1 Z10 F900 ; safely lift nozzle 10mm up from current layer",
+    "G90 ; switch back to absolute positioning",
+    "M104 S0 ; turn off nozzle heater",
+    "M140 S0 ; turn off bed heater",
+    "M106 S0 ; turn off cooling fan",
+    "G1 X0 Y220 F6000 ; push bed forward for easy removal",
+    "M84 ; disable stepper motors",
   ];
 }
 
@@ -629,11 +710,23 @@ function getRetractionMove(params, direction) {
   return `G1 E${fixed(length, 4)} F${fixed(params.retractionSpeed, 0)}`;
 }
 
-function getZModulatedHeight(baseZ, distanceAlongPath, params) {
+function getSafeFanSpeed(params) {
+  const fanSpeed = Number(params.fanSpeed);
+  if (!Number.isFinite(fanSpeed)) return 255;
+  return Math.round(clamp(fanSpeed, 0, 255));
+}
+
+function getZModOffset(point, params) {
   const amplitude = clamp(params.zModAmplitude, 0.05, 0.6);
   const frequency = clamp(params.zModFrequency, 0.1, 2);
-  const phase = (distanceAlongPath / 10) * frequency * Math.PI * 2;
-  return Math.max(params.layerHeight, baseZ + Math.sin(phase) * amplitude);
+  const absoluteX = params.originX + point.x;
+  const absoluteY = params.originY + point.y;
+  return Math.sin(absoluteX * frequency) * Math.cos(absoluteY * frequency) * amplitude;
+}
+
+function getZModulatedHeight(baseZ, point, params) {
+  const zModHeight = getZModOffset(point, params);
+  return Math.max(baseZ, baseZ + zModHeight);
 }
 
 function formatEstimatedTime(minutes) {
@@ -683,6 +776,11 @@ function generateGcode(params) {
     lines.push("G92 E0");
     lines.push(`;Z:${fixed(z, 3)}`);
     lines.push(`G1 Z${fixed(z)} F600`);
+    if (layer === 0) {
+      lines.push("M106 S0 ; turn off fan for layer 0 root adhesion");
+    } else if (layer === 1) {
+      lines.push(`M106 S${getSafeFanSpeed(params)} ; enable cooling fan from layer 1`);
+    }
     currentZ = z;
 
     paths.forEach((path, pathIndex) => {
@@ -707,14 +805,13 @@ function generateGcode(params) {
         lines.push(getRetractionMove(params, 1));
       }
 
-      let pathDistance = 0;
       for (let i = 1; i < path.points.length; i += 1) {
         const prev = pointToMachine(path.points[i - 1], params);
         const next = pointToMachine(path.points[i], params);
+        const nextLocal = path.points[i];
         const distance = Math.hypot(next.x - prev.x, next.y - prev.y);
         const extrusion = extrusionForDistance(distance, params);
-        pathDistance += distance;
-        const nextZ = usePathZMod ? getZModulatedHeight(z, pathDistance, params) : z;
+        const nextZ = usePathZMod ? getZModulatedHeight(z, nextLocal, params) : z;
         totalExtrusion += extrusion;
         totalPrintDistance += distance;
         totalMoves += 1;
@@ -911,6 +1008,16 @@ function setWorkspaceMode(mode) {
   render();
 }
 
+function setViewMode(mode) {
+  state.viewMode = mode;
+  viewModeButtons.forEach((button) => {
+    const isActive = button.dataset.viewMode === mode;
+    button.classList.toggle("active", isActive);
+    button.setAttribute("aria-pressed", String(isActive));
+  });
+  render();
+}
+
 function setSettingsMode(mode) {
   advancedSettingSections.forEach((section) => {
     section.classList.toggle("hidden", mode === "basic");
@@ -943,6 +1050,12 @@ settingsModeInputs.forEach((input) => {
 modeSwitchButtons.forEach((button) => {
   button.addEventListener("click", () => {
     setWorkspaceMode(button.dataset.workspaceMode);
+  });
+});
+
+viewModeButtons.forEach((button) => {
+  button.addEventListener("click", () => {
+    setViewMode(button.dataset.viewMode);
   });
 });
 

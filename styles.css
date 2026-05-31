@@ -151,8 +151,9 @@ textarea {
 .intro-actions {
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
   justify-content: center;
-  gap: 8px;
+  gap: 10px;
 }
 
 .intro-enter {
@@ -172,9 +173,34 @@ textarea {
   color: var(--ink);
 }
 
+.intro-image-enter {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 48px;
+  min-width: 48px;
+  height: 48px;
+  min-height: 48px;
+  border-color: rgba(17, 17, 17, 0.18);
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.68);
+  padding: 0;
+  font-size: 19px;
+  letter-spacing: 0;
+  line-height: 1;
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0);
+}
+
 .intro-enter:hover {
   background: var(--accent);
   border-color: var(--accent);
+  color: #fff;
+}
+
+.intro-image-enter:hover {
+  background: var(--ink);
+  border-color: var(--ink);
+  box-shadow: 0 12px 28px rgba(17, 17, 17, 0.12);
   color: #fff;
 }
 
@@ -352,6 +378,51 @@ h1 {
 .gcode-header strong {
   font-size: 18px;
   font-weight: 620;
+}
+
+.preview-meta {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.view-tabs {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(42px, 1fr));
+  gap: 4px;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fbfbfb;
+}
+
+.view-tab {
+  min-height: 28px;
+  border-color: var(--line);
+  border-radius: 6px;
+  background: #f2f2f2;
+  padding: 0 10px;
+  color: #333;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+}
+
+.view-tab.active {
+  border-color: var(--ink);
+  background: var(--ink);
+  color: #fff;
+}
+
+.view-tab:hover {
+  background: var(--accent-soft);
+  color: var(--ink);
+}
+
+.view-tab.active:hover {
+  background: var(--ink);
+  color: #fff;
 }
 
 .preview-stats {
@@ -882,6 +953,10 @@ button.primary:hover {
   }
 
   .preview-stats {
+    justify-content: start;
+  }
+
+  .preview-meta {
     justify-content: start;
   }
 
