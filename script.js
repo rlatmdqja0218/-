@@ -868,17 +868,33 @@ function updateGcode() {
 }
 
 function render() {
+  syncTotalHeightStep();
   drawPreview();
   updateGcode();
+}
+
+function syncTotalHeightStep() {
+  const layerStep = Number.isFinite(state.layerHeight) && state.layerHeight > 0 ? state.layerHeight : 0.01;
+  document.querySelectorAll('[data-param="totalHeight"]').forEach((input) => {
+    const alignedStep = fixed(layerStep, 3);
+    input.setAttribute("step", alignedStep);
+    input.setAttribute("min", alignedStep);
+  });
 }
 
 function syncParamInputs(name, value) {
   document.querySelectorAll(`[data-param="${name}"]`).forEach((input) => {
     input.value = value;
   });
+
+  if (name === "totalHeight" || name === "layerHeight") {
+    syncTotalHeightStep();
+  }
 }
 
 function syncHeightParams(changedParam) {
+  syncTotalHeightStep();
+
   if (changedParam === "totalHeight") {
     state.layers = Math.max(1, Math.round(state.totalHeight / state.layerHeight));
     state.totalHeight = Number((state.layers * state.layerHeight).toFixed(2));
@@ -923,6 +939,81 @@ function applyFilamentPreset(presetName) {
 
 document.querySelectorAll("[data-param]").forEach((input) => {
   input.addEventListener("input", handleParamInput);
+  input.addEventListener("change", handleParamInput);
+});
+
+function stepParamInput(input, direction) {
+  if (!input || !input.dataset.param || !direction) return;
+
+  if (input.dataset.param === "totalHeight" || input.dataset.param === "layerHeight") {
+    syncTotalHeightStep();
+  }
+
+  try {
+    if (direction > 0 && typeof input.stepUp === "function") {
+      input.stepUp();
+    } else if (direction < 0 && typeof input.stepDown === "function") {
+      input.stepDown();
+    } else {
+      const step = Number(input.step) || 1;
+      input.value = Number(input.value || 0) + step * direction;
+    }
+  } catch (error) {
+    const step = Number(input.step) || 1;
+    input.value = Number(input.value || 0) + step * direction;
+  }
+
+  handleParamInput({ target: input });
+}
+
+function handleNativeNumberSpin(event) {
+  const input = event.currentTarget;
+  if (event.button !== 0 || input.type !== "number" || !input.dataset.param) return;
+
+  const rect = input.getBoundingClientRect();
+  const spinZoneWidth = Math.min(28, rect.width * 0.3);
+  if (event.clientX < rect.right - spinZoneWidth) return;
+
+  event.preventDefault();
+  const direction = event.clientY < rect.top + rect.height / 2 ? 1 : -1;
+  stepParamInput(input, direction);
+}
+
+document.querySelectorAll('input[type="number"][data-param]').forEach((input) => {
+  input.addEventListener("pointerdown", handleNativeNumberSpin);
+});
+
+function getStepperDirection(button) {
+  if (button.dataset.stepDirection === "up" || button.dataset.step === "up") return 1;
+  if (button.dataset.stepDirection === "down" || button.dataset.step === "down") return -1;
+  if (button.matches(".param-step-up, .step-up, .spinner-up, .increment, [data-step-up]")) return 1;
+  if (button.matches(".param-step-down, .step-down, .spinner-down, .decrement, [data-step-down]")) return -1;
+  return 0;
+}
+
+function getStepperInput(button) {
+  const explicitParam = button.dataset.paramTarget || button.dataset.param;
+  if (explicitParam) return document.querySelector(`[data-param="${explicitParam}"]`);
+
+  const explicitSelector = button.dataset.inputTarget;
+  if (explicitSelector) return document.querySelector(explicitSelector);
+
+  const field = button.closest(".field, .range-field, .setting-group");
+  return field ? field.querySelector("input[data-param]") : null;
+}
+
+document.addEventListener("click", (event) => {
+  const button = event.target.closest(
+    "[data-step-direction], [data-step], [data-step-up], [data-step-down], .param-step-up, .param-step-down, .step-up, .step-down, .spinner-up, .spinner-down, .increment, .decrement"
+  );
+  if (!button) return;
+
+  const direction = getStepperDirection(button);
+  const input = getStepperInput(button);
+  if (!direction || !input || !input.dataset.param) return;
+
+  event.preventDefault();
+  stepParamInput(input, direction);
 });
 
 useGradientInput.addEventListener("change", () => {
