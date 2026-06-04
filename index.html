@@ -6,7 +6,7 @@
     <title>G-CODE TOOL</title>
     <link rel="stylesheet" href="styles.css" />
   </head>
-  <body class="intro-active">
+  <body class="intro-active" data-workspace-mode="geometry" data-form-factor="flat" data-page-mode="flat">
     <div id="introScreen" class="intro-screen" aria-label="G-CODE TOOL intro">
       <canvas id="introCanvas" aria-hidden="true"></canvas>
       <div class="intro-meta intro-meta-top" aria-hidden="true">
@@ -18,8 +18,12 @@
         <h2>G-CODE TOOL</h2>
         <p class="intro-copy">프린터의 이동 경로를 정교한 직조 궤적으로 변환합니다.</p>
         <div class="intro-actions" aria-label="작업 모드 선택">
-          <button id="enterGeometryMode" class="intro-enter" type="button">Pure Geometry</button>
-          <button id="enterImageMode" class="intro-enter intro-image-enter" type="button" aria-label="Image Modulation">📷</button>
+          <button class="intro-enter" type="button" data-intro-mode="geometry" data-intro-form="flat">Flat Plate</button>
+          <button class="intro-enter" type="button" data-intro-mode="geometry" data-intro-form="cylinder">Cylinder Body</button>
+          <button class="intro-enter" type="button" data-intro-mode="geometry" data-intro-form="cube">Cube Body</button>
+          <button class="intro-enter intro-image-enter" type="button" data-intro-mode="image" data-intro-form="flat" aria-label="Image Modulation">
+            <span class="intro-image-glyph" aria-hidden="true"></span>
+          </button>
         </div>
       </div>
       <div class="intro-footer" aria-hidden="true">
@@ -31,10 +35,16 @@
     </div>
 
     <nav class="mode-switcher" aria-label="작업 모드 전환">
-      <button class="mode-switch active" type="button" data-workspace-mode="geometry" aria-pressed="true">
-        <span>GE</span>
+      <button class="mode-switch active" type="button" data-target-mode="flat" aria-pressed="true">
+        <span>FL</span>
       </button>
-      <button class="mode-switch" type="button" data-workspace-mode="image" aria-pressed="false">
+      <button class="mode-switch" type="button" data-target-mode="cylinder" aria-pressed="false">
+        <span>CY</span>
+      </button>
+      <button class="mode-switch" type="button" data-target-mode="cube" aria-pressed="false">
+        <span>CU</span>
+      </button>
+      <button class="mode-switch" type="button" data-target-mode="image" aria-pressed="false">
         <span>IM</span>
       </button>
     </nav>
@@ -86,11 +96,11 @@
         </div>
 
         <section class="control-group">
-          <div class="group-title">
+          <div class="group-title pattern-mode-header">
             <span>패턴</span>
             <small>2D toolpath</small>
           </div>
-          <div class="segmented" role="radiogroup" aria-label="패턴 유형">
+          <div class="segmented pattern-mode-segmented" role="radiogroup" aria-label="패턴 유형">
             <label>
               <input type="radio" name="patternMode" value="grid" />
               <span>격자</span>
@@ -104,7 +114,46 @@
               <span>메시</span>
             </label>
           </div>
-          <div class="two-col">
+          <div class="form-factor-panel cylinder-solid-controls">
+            <label class="range-field compact">
+              <span>원통 반지름</span>
+              <input data-param="solidRadius" type="range" min="10" max="120" step="1" value="40" />
+              <input data-param="solidRadius" type="number" min="10" max="120" step="1" value="40" />
+            </label>
+            <label class="range-field compact">
+              <span>오브젝트 높이</span>
+              <input data-param="solidHeight" type="range" min="5" max="220" step="1" value="100" />
+              <input data-param="solidHeight" type="number" min="5" max="220" step="1" value="100" />
+            </label>
+            <label class="range-field compact">
+              <span>직조 주파수</span>
+              <input data-param="solidWeaveFrequency" type="range" min="3" max="24" step="1" value="8" />
+              <input data-param="solidWeaveFrequency" type="number" min="3" max="24" step="1" value="8" />
+            </label>
+          </div>
+          <div class="form-factor-panel cube-solid-controls">
+            <label class="range-field compact">
+              <span>육면체 가로</span>
+              <input data-param="solidWidth" type="range" min="20" max="180" step="1" value="80" />
+              <input data-param="solidWidth" type="number" min="20" max="180" step="1" value="80" />
+            </label>
+            <label class="range-field compact">
+              <span>육면체 세로</span>
+              <input data-param="solidDepth" type="range" min="20" max="180" step="1" value="80" />
+              <input data-param="solidDepth" type="number" min="20" max="180" step="1" value="80" />
+            </label>
+            <label class="range-field compact">
+              <span>출력 높이</span>
+              <input data-param="solidHeight" type="range" min="5" max="220" step="1" value="100" />
+              <input data-param="solidHeight" type="number" min="5" max="220" step="1" value="100" />
+            </label>
+            <label class="range-field compact">
+              <span>직조 주파수</span>
+              <input data-param="solidWeaveFrequency" type="range" min="3" max="24" step="1" value="8" />
+              <input data-param="solidWeaveFrequency" type="number" min="3" max="24" step="1" value="8" />
+            </label>
+          </div>
+          <div class="two-col form-factor-panel flat-size-controls">
             <label class="field">
               <span>가로 크기 (mm)</span>
               <input data-param="width" type="number" min="20" max="250" step="1" value="120" />
@@ -118,7 +167,7 @@
               <input id="totalHeight" data-param="totalHeight" type="number" min="0.05" max="40" step="0.01" value="1.12" />
             </label>
           </div>
-          <label class="field">
+          <label class="field filament-preset-field">
             <span>필라멘트 프리셋</span>
             <select id="filamentPreset">
               <option value="custom">수동 설정</option>
@@ -132,7 +181,7 @@
           </label>
         </section>
 
-        <section class="control-group" data-mode="advanced">
+        <section class="control-group structure-density-controls" data-mode="advanced">
           <div class="group-title">
             <span>구조 밀도</span>
             <small>geometry</small>
@@ -154,14 +203,14 @@
               </div>
             </div>
 
-            <div class="setting-group">
+            <div class="setting-group zmod-setting">
               <label class="checkbox-label">
                 <input type="checkbox" id="useZMod" />
                 제트축 입체 변조 활성화
               </label>
             </div>
 
-            <div id="zModSliders" class="hidden">
+            <div id="zModSliders" class="zmod-sliders hidden">
               <label class="range-field compact">
                 <span>Z 진폭</span>
                 <input id="zModAmplitude" type="range" data-param="zModAmplitude" min="0.05" max="0.6" step="0.01" value="0.15" />
@@ -184,7 +233,7 @@
             <input data-param="spacing" type="range" min="1" max="20" step="0.1" value="7.5" />
             <input data-param="spacing" type="number" min="1" max="20" step="0.1" value="7.5" />
           </label>
-          <label class="range-field">
+          <label class="range-field cross-angle-control">
             <span>교차 각도</span>
             <input data-param="crossAngle" type="range" min="15" max="165" step="1" value="90" />
             <input data-param="crossAngle" type="number" min="15" max="165" step="1" value="90" />
@@ -196,7 +245,7 @@
           </label>
         </section>
 
-        <section class="control-group" data-mode="advanced">
+        <section class="control-group print-motion-controls" data-mode="advanced">
           <div class="group-title">
             <span>프린트 제어</span>
             <small>motion</small>
@@ -226,7 +275,7 @@
             <input data-param="retractionSpeed" type="range" min="300" max="6000" step="50" value="1800" />
             <input data-param="retractionSpeed" type="number" min="300" max="6000" step="50" value="1800" />
           </label>
-          <div data-mode="advanced" class="skirt-settings hidden">
+          <div data-mode="advanced" class="skirt-settings solid-motion-extra hidden">
             <div class="setting-group">
               <label>외곽선 횟수 (바퀴)</label>
               <input type="number" data-param="skirtCount" value="2" min="0" max="5" />
@@ -237,7 +286,7 @@
               <input type="number" data-param="skirtDistance" value="5.0" step="0.5" min="0" />
             </div>
           </div>
-          <div class="two-col">
+          <div class="two-col solid-motion-extra">
             <label class="field">
               <span>레이어 높이</span>
               <input data-param="layerHeight" type="number" min="0.05" max="1" step="0.01" value="0.28" />
@@ -253,6 +302,32 @@
             <label class="field">
               <span>필라멘트</span>
               <input data-param="filamentDiameter" type="number" min="1.5" max="3" step="0.01" value="1.75" />
+            </label>
+          </div>
+        </section>
+
+        <section class="control-group cylinder-knit-options hidden" data-mode="advanced">
+          <div class="group-title">
+            <span>원통 적층 안정화</span>
+            <small>cylinder</small>
+          </div>
+          <div class="effect-container">
+            <h3>베이스 빌드업</h3>
+            <div class="setting-group">
+              <label class="checkbox-label">
+                <input type="checkbox" data-param="cylinderBaseEnabled" checked />
+                바닥 안정화 레이어 먼저 출력
+              </label>
+            </div>
+            <label class="range-field compact">
+              <span>안정화 횟수</span>
+              <input data-param="cylinderBaseLayers" type="range" min="0" max="8" step="1" value="3" />
+              <input data-param="cylinderBaseLayers" type="number" min="0" max="8" step="1" value="3" />
+            </label>
+            <label class="range-field compact">
+              <span>수직 상승 압출 보정</span>
+              <input data-param="cylinderUpExtrusionBoost" type="range" min="1" max="1.6" step="0.01" value="1.12" />
+              <input data-param="cylinderUpExtrusionBoost" type="number" min="1" max="1.6" step="0.01" value="1.12" />
             </label>
           </div>
         </section>

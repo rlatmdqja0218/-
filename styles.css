@@ -7,8 +7,8 @@
   --quiet: #9a9a9a;
   --line: #e5e5e5;
   --line-strong: #1b1b1b;
-  --accent: #2b5f55;
-  --accent-soft: #e6efec;
+  --accent: #ff6a00;
+  --accent-soft: #fff0e6;
   --field: #fbfbfb;
   --shadow: 0 18px 46px rgba(0, 0, 0, 0.055);
   --rail-left: 24px;
@@ -157,7 +157,7 @@ textarea {
 }
 
 .intro-enter {
-  min-width: 108px;
+  min-width: 116px;
   min-height: 34px;
   border-radius: 999px;
   border-color: var(--ink);
@@ -185,10 +185,44 @@ textarea {
   border-radius: 50%;
   background: rgba(255, 255, 255, 0.68);
   padding: 0;
+  color: var(--ink);
   font-size: 19px;
   letter-spacing: 0;
   line-height: 1;
   box-shadow: 0 10px 24px rgba(0, 0, 0, 0);
+}
+
+.intro-image-glyph {
+  position: relative;
+  display: block;
+  width: 18px;
+  height: 15px;
+  border: 1px solid currentColor;
+  border-radius: 2px;
+}
+
+.intro-image-glyph::before {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background: currentColor;
+  content: "";
+}
+
+.intro-image-glyph::after {
+  position: absolute;
+  right: 3px;
+  bottom: 3px;
+  left: 4px;
+  height: 6px;
+  border-right: 1px solid currentColor;
+  border-bottom: 1px solid currentColor;
+  transform: skewX(-28deg);
+  transform-origin: bottom right;
+  content: "";
 }
 
 .intro-enter:hover {
@@ -458,11 +492,33 @@ h1 {
   background: rgba(255, 255, 255, 0.88);
   border: 1px solid var(--line);
   border-radius: 6px;
+  cursor: grab;
+  touch-action: none;
+}
+
+#toolpathCanvas:active {
+  cursor: grabbing;
 }
 
 .controls-panel {
   overflow: auto;
   padding: 0;
+}
+
+body[data-workspace-mode="geometry"] #geometryControlsPanel.controls-panel {
+  display: block;
+}
+
+body[data-workspace-mode="geometry"] #imageControlsPanel.controls-panel {
+  display: none;
+}
+
+body[data-workspace-mode="image"] #geometryControlsPanel.controls-panel {
+  display: none;
+}
+
+body[data-workspace-mode="image"] #imageControlsPanel.controls-panel {
+  display: block;
 }
 
 .settings-tabs {
@@ -587,6 +643,61 @@ h1 {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 10px;
+}
+
+.controls-panel .form-factor-panel {
+  display: none;
+}
+
+body[data-workspace-mode="geometry"][data-form-factor="flat"] #geometryControlsPanel .flat-size-controls {
+  display: grid;
+}
+
+body[data-workspace-mode="geometry"][data-form-factor="cylinder"] #geometryControlsPanel .cylinder-solid-controls,
+body[data-workspace-mode="geometry"][data-form-factor="cube"] #geometryControlsPanel .cube-solid-controls {
+  display: grid;
+  gap: 10px;
+  margin-bottom: 14px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fbfbfb;
+}
+
+body[data-workspace-mode="geometry"][data-form-factor="cylinder"] #geometryControlsPanel .zmod-setting,
+body[data-workspace-mode="geometry"][data-form-factor="cylinder"] #geometryControlsPanel .zmod-sliders,
+body[data-workspace-mode="geometry"][data-form-factor="cube"] #geometryControlsPanel .zmod-setting,
+body[data-workspace-mode="geometry"][data-form-factor="cube"] #geometryControlsPanel .zmod-sliders {
+  display: none !important;
+}
+
+body[data-workspace-mode="geometry"][data-form-factor="cylinder"] #geometryControlsPanel .pattern-mode-header,
+body[data-workspace-mode="geometry"][data-form-factor="cylinder"] #geometryControlsPanel .pattern-mode-segmented,
+body[data-workspace-mode="geometry"][data-form-factor="cylinder"] #geometryControlsPanel .structure-density-controls,
+body[data-workspace-mode="geometry"][data-form-factor="cylinder"] #geometryControlsPanel .filament-preset-field,
+body[data-workspace-mode="geometry"][data-form-factor="cube"] #geometryControlsPanel .pattern-mode-header,
+body[data-workspace-mode="geometry"][data-form-factor="cube"] #geometryControlsPanel .pattern-mode-segmented,
+body[data-workspace-mode="geometry"][data-form-factor="cube"] #geometryControlsPanel .structure-density-controls,
+body[data-workspace-mode="geometry"][data-form-factor="cube"] #geometryControlsPanel .filament-preset-field {
+  display: none !important;
+}
+
+body[data-workspace-mode="geometry"][data-form-factor="cylinder"] #geometryControlsPanel .print-motion-controls.hidden,
+body[data-workspace-mode="geometry"][data-form-factor="cube"] #geometryControlsPanel .print-motion-controls.hidden {
+  display: block !important;
+}
+
+body[data-workspace-mode="geometry"][data-form-factor="cylinder"] #geometryControlsPanel .print-motion-controls .solid-motion-extra,
+body[data-workspace-mode="geometry"][data-form-factor="cube"] #geometryControlsPanel .print-motion-controls .solid-motion-extra {
+  display: none !important;
+}
+
+#geometryControlsPanel .cylinder-knit-options {
+  display: none;
+}
+
+body[data-workspace-mode="geometry"][data-form-factor="cylinder"] #geometryControlsPanel .cylinder-knit-options:not(.hidden) {
+  display: block;
 }
 
 .field,

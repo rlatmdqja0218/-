@@ -1,8 +1,7 @@
 const introScreen = document.querySelector("#introScreen");
 const introCanvas = document.querySelector("#introCanvas");
 const introCtx = introCanvas.getContext("2d");
-const enterGeometryMode = document.querySelector("#enterGeometryMode");
-const enterImageMode = document.querySelector("#enterImageMode");
+const introFormButtons = document.querySelectorAll("[data-intro-form]");
 const canvas = document.querySelector("#toolpathCanvas");
 const ctx = canvas.getContext("2d");
 const gcodeOutput = document.querySelector("#gcodeOutput");
@@ -18,7 +17,7 @@ const geometryControlsPanel = document.querySelector("#geometryControlsPanel");
 const imageControlsPanel = document.querySelector("#imageControlsPanel");
 const imageModeUploader = document.querySelector("#imageModeUploader");
 const imageUploadStatus = document.querySelector("#imageUploadStatus");
-const modeSwitchButtons = document.querySelectorAll("[data-workspace-mode]");
+const modeSwitchButtons = document.querySelectorAll("[data-target-mode]");
 const viewModeButtons = document.querySelectorAll("[data-view-mode]");
 const settingsModeInputs = document.querySelectorAll('input[name="settingsMode"]');
 const advancedSettingSections = document.querySelectorAll('[data-mode="advanced"]');
@@ -30,9 +29,18 @@ const gcodeSummary = document.querySelector("#gcodeSummary");
 const state = {
   workspaceMode: "geometry",
   viewMode: "top",
+  formFactor: "flat",
   patternMode: "weave",
   width: 120,
   height: 120,
+  solidRadius: 40,
+  solidHeight: 100,
+  solidWidth: 80,
+  solidDepth: 80,
+  solidWeaveFrequency: 8,
+  cylinderBaseEnabled: true,
+  cylinderBaseLayers: 3,
+  cylinderUpExtrusionBoost: 1.12,
   density: 1.6,
   spacing: 7.5,
   crossAngle: 90,
@@ -65,6 +73,8 @@ const state = {
   filamentPreset: "custom",
 };
 
+const previewState = { zoom: 1.0, offsetX: 0, offsetY: 0, isDragging: false, startX: 0, startY: 0 };
+
 const patternNames = {
   grid: "직교 격자",
   weave: "직조 편향",
@@ -84,7 +94,7 @@ const filamentPresetParams = ["nozzleTemp", "bedTemp", "printSpeed", "extrusionM
 const introPalette = [
   "rgba(17, 17, 17, 0.52)",
   "rgba(85, 85, 85, 0.38)",
-  "rgba(43, 95, 85, 0.32)",
+  "rgba(255, 106, 0, 0.32)",
   "rgba(120, 125, 112, 0.3)",
 ];
 const introLines = Array.from({ length: 54 }, (_, index) => ({
@@ -187,8 +197,55 @@ function stopIntroAnimation() {
   }
 }
 
-function enterWorkspace(mode) {
-  setWorkspaceMode(mode);
+function normalizeFormFactor(formFactor) {
+  return ["flat", "cylinder", "cube"].includes(formFactor) ? formFactor : "flat";
+}
+
+function getPageMode() {
+  return state.workspaceMode === "image" ? "image" : state.formFactor;
+}
+
+function syncModeDataset() {
+  document.body.dataset.workspaceMode = state.workspaceMode;
+  document.body.dataset.formFactor = state.formFactor;
+  document.body.dataset.pageMode = getPageMode();
+}
+
+function syncModeSwitchButtons() {
+  const activeMode = getPageMode();
+  modeSwitchButtons.forEach((button) => {
+    const isActive = button.dataset.targetMode === activeMode;
+    button.classList.toggle("active", isActive);
+    button.setAttribute("aria-pressed", String(isActive));
+  });
+}
+
+function applyWorkspaceRoute(mode, formFactor = "flat", shouldRender = true) {
+  resetPreviewView();
+  state.workspaceMode = mode === "image" ? "image" : "geometry";
+  state.formFactor = state.workspaceMode === "image" ? "flat" : normalizeFormFactor(formFactor);
+
+  geometryControlsPanel.classList.toggle("hidden", state.workspaceMode !== "geometry");
+  imageControlsPanel.classList.toggle("hidden", state.workspaceMode !== "image");
+  if (isSolidFormFactor(state)) {
+    state.useZMod = false;
+    useZModInput.checked = false;
+    zModSliders.classList.add("hidden");
+  }
+  syncModeDataset();
+  syncParamInputs("formFactor", state.formFactor);
+  setViewMode(state.formFactor === "cylinder" || state.formFactor === "cube" ? "iso" : "top", false);
+  syncModeSwitchButtons();
+
+  if (shouldRender) render();
+}
+
+function setFormFactor(formFactor, shouldRender = true) {
+  applyWorkspaceRoute("geometry", formFactor, shouldRender);
+}
+
+function enterWorkspace(mode, formFactor = "flat") {
+  applyWorkspaceRoute(mode, formFactor);
   stopIntroAnimation();
   introScreen.classList.add("is-exiting");
   document.body.classList.remove("intro-active");
@@ -201,8 +258,12 @@ function enterWorkspace(mode) {
 function segmentLength(points) {
   return points.slice(1).reduce((total, point, index) => {
     const prev = points[index];
-    return total + Math.hypot(point.x - prev.x, point.y - prev.y);
+    return total + getPointDistance(prev, point);
   }, 0);
+}
+
+function getPointDistance(start, end) {
+  return Math.hypot(end.x - start.x, end.y - start.y, (end.z || 0) - (start.z || 0));
 }
 
 function getLineSegment(angle, offset, width, height) {
@@ -489,6 +550,10 @@ function generatePaths(params, layerIndex = 0) {
 }
 
 function getAllLayerPaths(params) {
+  if (isSolidFormFactor(params)) {
+    return generateSolidToolpaths(params).map((path) => ({ ...path, layer: 0 }));
+  }
+
   const paths = [];
   for (let layer = 0; layer < params.layers; layer += 1) {
     generateModePaths(params, layer).forEach((path) => {
@@ -499,11 +564,323 @@ function getAllLayerPaths(params) {
 }
 
 function generateModePaths(params, layerIndex = 0) {
+  if (isSolidFormFactor(params)) {
+    return generateSolidToolpaths(params);
+  }
+
   if (params.workspaceMode === "image") {
     return generateImageModulationPaths(params, layerIndex);
   }
 
   return generatePaths(params, layerIndex);
+}
+
+function isSolidFormFactor(params) {
+  return params.formFactor === "cylinder" || params.formFactor === "cube";
+}
+
+function getSolidLayerCount(params) {
+  const layerHeight = Math.max(0.05, params.layerHeight || state.layerHeight);
+  const solidHeight = Math.max(layerHeight, params.solidHeight || state.solidHeight);
+  return Math.max(1, Math.ceil(solidHeight / layerHeight));
+}
+
+function getSolidTargetHeight(params) {
+  const layerHeight = Math.max(0.05, params.layerHeight || state.layerHeight);
+  return Math.max(layerHeight, params.solidHeight || state.solidHeight);
+}
+
+function getSolidZ(params, layerIndex, layerProgress) {
+  const layerHeight = Math.max(0.05, params.layerHeight || state.layerHeight);
+  const solidHeight = getSolidTargetHeight(params);
+  return clamp((layerIndex + 1 + layerProgress) * layerHeight, layerHeight, solidHeight);
+}
+
+function generateSolidToolpaths(params) {
+  if (params.formFactor === "cylinder") {
+    return generateCylinderToolpaths(params);
+  }
+
+  if (params.formFactor === "cube") {
+    return generateCubeToolpaths(params);
+  }
+
+  return [];
+}
+
+function getSolidSurfaceSpacing(params) {
+  return Math.max(1.2, (params.spacing || state.spacing) / Math.max(0.5, params.density || state.density));
+}
+
+function getSolidSurfaceStep(params) {
+  return Math.max(0.9, (params.nozzleDiameter || state.nozzleDiameter) * 3.2);
+}
+
+function getSolidPatternFrequency(params) {
+  return Math.max(1, Math.round(params.solidWeaveFrequency || state.solidWeaveFrequency));
+}
+
+function getCylinderColumnCount(params) {
+  const frequency = getSolidPatternFrequency(params);
+  return Math.max(2, Math.round(frequency * 2));
+}
+
+function getCylinderVerticalSteps(params, solidHeight) {
+  const nozzleDiameter = Math.max(0.2, params.nozzleDiameter || state.nozzleDiameter);
+  const verticalStep = Math.max(0.75, nozzleDiameter * 2.8);
+  return Math.max(24, Math.ceil(solidHeight / verticalStep));
+}
+
+function wrapSurfaceU(u, surfaceWidth) {
+  return ((u % surfaceWidth) + surfaceWidth) % surfaceWidth;
+}
+
+function getSurfaceSpacingAt(baseSpacing, position, maxDistance, params) {
+  return getGradientSpacing(baseSpacing, position - maxDistance, maxDistance, params);
+}
+
+function getCubePerimeterPoint(width, depth, progress) {
+  const halfW = width / 2;
+  const halfD = depth / 2;
+  const edge = progress * 4;
+  const side = Math.min(3, Math.floor(edge));
+  const local = edge - side;
+
+  if (side === 0) return { x: -halfW + width * local, y: -halfD };
+  if (side === 1) return { x: halfW, y: -halfD + depth * local };
+  if (side === 2) return { x: halfW - width * local, y: halfD };
+  return { x: -halfW, y: halfD - depth * local };
+}
+
+function getCubeSurfacePoint(u, z, width, depth, perimeter) {
+  return {
+    ...getCubePerimeterPoint(width, depth, wrapSurfaceU(u, perimeter) / perimeter),
+    z,
+  };
+}
+
+function createSolidSurfacePatternPaths(params, surfaceWidth, surfaceHeight, mapSurfacePoint, familyPrefix, surfaceOptions = {}) {
+  const spacing = getSolidSurfaceSpacing(params);
+  const step = getSolidSurfaceStep(params);
+  const minZ = Math.max(0.05, params.layerHeight || state.layerHeight);
+  const maxZ = Math.max(minZ, surfaceHeight);
+  const waveFrequency = getSolidPatternFrequency(params);
+  const waveAmplitude = clamp(spacing * 0.28, 0.4, 3.2);
+  const paths = [];
+
+  const addHorizontalRows = (options = {}) => {
+    let rowIndex = 0;
+    let z = minZ;
+    while (z <= maxZ + 0.001) {
+      const points = [];
+      const uSteps = surfaceOptions.surfaceSegments || Math.max(32, Math.ceil(surfaceWidth / step));
+      const phase = rowIndex % 2 === 0 ? 0 : Math.PI;
+      for (let i = 0; i <= uSteps; i += 1) {
+        const u = (surfaceWidth * i) / uSteps;
+        const wave =
+          options.weave && !surfaceOptions.useLoopingZ
+            ? Math.sin((u / surfaceWidth) * Math.PI * 2 * waveFrequency + phase) * waveAmplitude
+            : 0;
+        points.push(mapSurfacePoint(u, clamp(z + wave, minZ, maxZ), { phaseShift: phase, family: "horizontal" }));
+      }
+      if (rowIndex % 2 === 1) points.reverse();
+      paths.push({ points, family: `${familyPrefix}Horizontal`, accent: options.accent === true });
+      rowIndex += 1;
+      z += getSurfaceSpacingAt(spacing, z, maxZ / 2, params);
+    }
+  };
+
+  const addVerticalColumns = (options = {}) => {
+    const uLimit = surfaceWidth - 0.001;
+    let columnIndex = 0;
+    let u = 0;
+    while (u <= uLimit) {
+      const points = [];
+      const zSteps = Math.max(18, Math.ceil((maxZ - minZ) / step));
+      const phase = columnIndex % 2 === 0 ? 0 : Math.PI;
+      for (let i = 0; i <= zSteps; i += 1) {
+        const t = i / zSteps;
+        const z = minZ + (maxZ - minZ) * t;
+        const wave = options.weave ? Math.sin(t * Math.PI * 2 * waveFrequency + phase) * waveAmplitude : 0;
+        points.push(mapSurfacePoint(u + wave, z, { phaseShift: phase, family: "vertical" }));
+      }
+      if (columnIndex % 2 === 1) points.reverse();
+      paths.push({ points, family: `${familyPrefix}Vertical`, accent: options.accent !== false });
+      columnIndex += 1;
+      u += getSurfaceSpacingAt(spacing, u, surfaceWidth / 2, params);
+    }
+  };
+
+  const addDiagonalSet = (direction, options = {}) => {
+    const zSteps = Math.max(24, Math.ceil((maxZ - minZ) / step));
+    const slope = surfaceWidth / Math.max(maxZ - minZ, 1) / Math.max(1, 90 / Math.max(15, params.crossAngle || state.crossAngle));
+    let lineIndex = 0;
+    for (let startU = 0; startU < surfaceWidth; startU += spacing * (options.dense ? 0.92 : 1.18)) {
+      const points = [];
+      const phase = lineIndex % 2 === 0 ? 0 : Math.PI;
+      for (let i = 0; i <= zSteps; i += 1) {
+        const t = i / zSteps;
+        const z = minZ + (maxZ - minZ) * t;
+        const weaveOffset = options.weave ? Math.sin(t * Math.PI * 2 * waveFrequency + phase) * waveAmplitude * 0.42 : 0;
+        points.push(mapSurfacePoint(startU + direction * (z - minZ) * slope + weaveOffset, z, { phaseShift: phase, family: "diagonal" }));
+      }
+      if (lineIndex % 2 === 1) points.reverse();
+      paths.push({ points, family: `${familyPrefix}Diagonal`, accent: true });
+      lineIndex += 1;
+    }
+  };
+
+  if (params.patternMode === "grid") {
+    addHorizontalRows();
+    addVerticalColumns();
+    return paths;
+  }
+
+  if (params.patternMode === "mesh") {
+    addHorizontalRows({ accent: false });
+    addDiagonalSet(1, { dense: true });
+    addDiagonalSet(-1, { dense: true });
+    return paths;
+  }
+
+  addHorizontalRows({ weave: true });
+  addVerticalColumns({ weave: true });
+  addDiagonalSet(1, { weave: true });
+  return paths;
+}
+
+function generateCylinderToolpaths(params) {
+  const radius = Math.max(1, params.solidRadius || state.solidRadius);
+  const minZ = Math.max(0.05, params.layerHeight || state.layerHeight);
+  const layerHeight = Math.max(0.05, params.layerHeight || state.layerHeight);
+  const localLift = layerHeight;
+  const diagonalRadius = radius + localLift * 0.3;
+  const segments = getCylinderColumnCount(params);
+  const layerCount = getSolidLayerCount(params);
+  const upSteps = Math.max(2, Math.ceil(localLift / Math.max(0.05, layerHeight * 0.5)));
+  const downSteps = Math.max(4, upSteps * 2);
+  const layerBuildStep = layerHeight / segments;
+  const segmentAngle = (Math.PI * 2) / segments;
+  const seamTheta = (segments - 1) * segmentAngle;
+  const baseEnabled = params.cylinderBaseEnabled !== false;
+  const requestedBaseLayers = Math.max(
+    0,
+    Math.round(Number.isFinite(params.cylinderBaseLayers) ? params.cylinderBaseLayers : state.cylinderBaseLayers)
+  );
+  const baseLayerCount = baseEnabled ? Math.min(requestedBaseLayers, Math.max(0, layerCount - 1)) : 0;
+  const baseSamples = Math.max(96, segments * 12);
+  const paths = [];
+
+  for (let baseIndex = 0; baseIndex < baseLayerCount; baseIndex += 1) {
+    const zBase = minZ + baseIndex * layerHeight;
+    const points = [];
+
+    for (let sampleIndex = 0; sampleIndex <= baseSamples; sampleIndex += 1) {
+      const progress = sampleIndex / baseSamples;
+      const theta = seamTheta - progress * Math.PI * 2;
+      points.push({
+        x: Math.cos(theta) * radius,
+        y: Math.sin(theta) * radius,
+        z: zBase,
+        zBase,
+        layerBase: zBase,
+        theta,
+        zPhase: baseIndex * Math.PI,
+        wave: -1,
+        radialCushion: 0,
+        radius,
+        loopLift: 0,
+        columnIndex: sampleIndex,
+        layerIndex: baseIndex,
+        strokeType: "base",
+        heightProgress: clamp((zBase - minZ) / Math.max(0.001, getSolidTargetHeight(params) - minZ), 0, 1),
+        strokeProgress: progress,
+      });
+    }
+
+    paths.push({ points, family: "cylinderBaseStack", accent: false, layerIndex: baseIndex });
+  }
+
+  for (let layerIndex = baseLayerCount; layerIndex < layerCount; layerIndex += 1) {
+    const zBase = minZ + layerIndex * layerHeight;
+    const points = [];
+
+    const pushPolarPoint = ({ theta, zHeight, segmentBase, segmentIndex, strokeType, progress, pointRadius }) => {
+      const liftRatio = clamp((zHeight - segmentBase) / localLift, 0, 1);
+      const r = Math.max(0.1, pointRadius);
+      points.push({
+        x: Math.cos(theta) * r,
+        y: Math.sin(theta) * r,
+        z: zHeight,
+        zBase: segmentBase,
+        layerBase: zBase,
+        theta,
+        zPhase: layerIndex * Math.PI + segmentIndex * Math.PI,
+        wave: liftRatio * 2 - 1,
+        radialCushion: strokeType === "down" ? 1 : 0,
+        radius: r,
+        loopLift: liftRatio,
+        columnIndex: segmentIndex,
+        layerIndex,
+        strokeType,
+        heightProgress: clamp((zHeight - minZ) / Math.max(0.001, getSolidTargetHeight(params) - minZ), 0, 1),
+        strokeProgress: progress,
+      });
+    };
+
+    for (let segmentIndex = segments - 1; segmentIndex >= 0; segmentIndex -= 1) {
+      const segmentOrder = segments - 1 - segmentIndex;
+      const segmentBase = zBase + segmentOrder * layerBuildStep;
+      const handoffBase = segmentBase + layerBuildStep;
+      const segmentTop = segmentBase + localLift;
+      const theta = segmentIndex * segmentAngle;
+      const prevTheta = theta - segmentAngle;
+
+      for (let upIndex = 0; upIndex <= upSteps; upIndex += 1) {
+        const upProgress = upIndex / upSteps;
+        pushPolarPoint({
+          theta,
+          zHeight: segmentBase + localLift * upProgress,
+          segmentBase,
+          segmentIndex,
+          strokeType: "up",
+          progress: upProgress,
+          pointRadius: radius,
+        });
+      }
+
+      for (let downIndex = 1; downIndex <= downSteps; downIndex += 1) {
+        const downProgress = downIndex / downSteps;
+        pushPolarPoint({
+          theta: theta + (prevTheta - theta) * downProgress,
+          zHeight: segmentTop + (handoffBase - segmentTop) * downProgress,
+          segmentBase,
+          segmentIndex,
+          strokeType: "down",
+          progress: downProgress,
+          pointRadius: diagonalRadius,
+        });
+      }
+    }
+
+    paths.push({ points, family: "cylinderVerticalDrop", accent: layerIndex % 2 === 1, layerIndex });
+  }
+
+  return paths;
+}
+
+function generateCubeToolpaths(params) {
+  const solidWidth = Math.max(1, params.solidWidth || state.solidWidth);
+  const solidDepth = Math.max(1, params.solidDepth || state.solidDepth);
+  const perimeter = (solidWidth + solidDepth) * 2;
+  const solidHeight = getSolidTargetHeight(params);
+  return createSolidSurfacePatternPaths(
+    params,
+    perimeter,
+    solidHeight,
+    (u, z) => getCubeSurfacePoint(u, z, solidWidth, solidDepth, perimeter),
+    "cube"
+  );
 }
 
 function getStats(paths) {
@@ -519,21 +896,187 @@ function getPreviewZHeight(point, path, pointIndex, params) {
   return getZModulatedHeight(baseZ, point, params) - baseZ;
 }
 
+function applyPreviewTransform(x, y, centerX, centerY) {
+  return {
+    x: (x - centerX) * previewState.zoom + centerX + previewState.offsetX,
+    y: (y - centerY) * previewState.zoom + centerY + previewState.offsetY,
+  };
+}
+
 function projectPreviewPoint(point, path, pointIndex, params, centerX, centerY, scale) {
   if (params.viewMode === "iso") {
     const isoX = (point.x - point.y) * Math.cos(Math.PI / 6);
-    const isoY = (point.x + point.y) * Math.sin(Math.PI / 6);
-    const zModHeight = getPreviewZHeight(point, path, pointIndex, params);
-    return {
-      x: centerX + isoX * scale,
-      y: centerY + (isoY - zModHeight * 24) * scale,
-    };
+    const isSolidPoint = params.formFactor === "cylinder" || params.formFactor === "cube";
+    const zHeight = isSolidPoint && Number.isFinite(point.z) ? point.z : getPreviewZHeight(point, path, pointIndex, params);
+    const zWeight = isSolidPoint ? 12 : 24;
+    const isoY = (point.x + point.y) * Math.sin(Math.PI / 6) - zHeight * zWeight;
+    return applyPreviewTransform(centerX + isoX * scale, centerY + isoY * scale, centerX, centerY);
   }
 
-  return {
-    x: centerX + point.x * scale,
-    y: centerY - point.y * scale,
-  };
+  return applyPreviewTransform(centerX + point.x * scale, centerY - point.y * scale, centerX, centerY);
+}
+
+function getFormFactorName(formFactor) {
+  if (formFactor === "cylinder") return "원통 세로 직조 조형";
+  if (formFactor === "cube") return "육면체 외벽 조형";
+  return "평면판";
+}
+
+function projectSolidPoint(point, params, centerX, centerY, scale) {
+  return projectPreviewPoint(point, { family: "solid" }, 0, params, centerX, centerY, scale);
+}
+
+function getSolidFootprintPoints(params) {
+  if (params.formFactor === "cylinder") {
+    const radius = Math.max(1, params.solidRadius || state.solidRadius);
+    const points = [];
+    for (let i = 0; i <= 96; i += 1) {
+      const theta = (i / 96) * Math.PI * 2;
+      points.push({ x: Math.cos(theta) * radius, y: Math.sin(theta) * radius, z: 0 });
+    }
+    return points;
+  }
+
+  const solidWidth = Math.max(1, params.solidWidth || state.solidWidth);
+  const solidDepth = Math.max(1, params.solidDepth || state.solidDepth);
+  const halfW = solidWidth / 2;
+  const halfD = solidDepth / 2;
+  return [
+    { x: -halfW, y: -halfD, z: 0 },
+    { x: halfW, y: -halfD, z: 0 },
+    { x: halfW, y: halfD, z: 0 },
+    { x: -halfW, y: halfD, z: 0 },
+    { x: -halfW, y: -halfD, z: 0 },
+  ];
+}
+
+function mixPreviewColor(start, end, amount) {
+  const value = clamp(amount, 0, 1);
+  const mixed = start.map((channel, index) => Math.round(channel + (end[index] - channel) * value));
+  return `rgb(${mixed[0]}, ${mixed[1]}, ${mixed[2]})`;
+}
+
+function getCylinderPreviewLiftRatio(point) {
+  if (Number.isFinite(point.loopLift)) return clamp(point.loopLift, 0, 1);
+  if (!Number.isFinite(point.z) || !Number.isFinite(point.zBase)) return 0;
+
+  const amplitude = Math.max(0.001, state.weaveAmplitude || 0.001);
+  return clamp((point.z - point.zBase) / amplitude, 0, 1);
+}
+
+function drawCylinderPreviewPath(path, centerX, centerY, scale, stride) {
+  const sampledPoints = path.points.filter((point, index) => index % stride === 0 || index === path.points.length - 1);
+  if (sampledPoints.length < 2) return;
+
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
+
+  for (let index = 1; index < sampledPoints.length; index += 1) {
+    const prevPoint = sampledPoints[index - 1];
+    const nextPoint = sampledPoints[index];
+    const prevProjected = projectPreviewPoint(prevPoint, path, index - 1, state, centerX, centerY, scale);
+    const nextProjected = projectPreviewPoint(nextPoint, path, index, state, centerX, centerY, scale);
+    const liftRatio = (getCylinderPreviewLiftRatio(prevPoint) + getCylinderPreviewLiftRatio(nextPoint)) / 2;
+    const layerRatio = clamp(((prevPoint.z || 0) + (nextPoint.z || 0)) / Math.max(1, getSolidTargetHeight(state) * 2), 0, 1);
+    const isUpStroke = nextPoint.strokeType === "up";
+    const startX = isUpStroke ? prevProjected.x + (nextProjected.x - prevProjected.x) * 0.18 : prevProjected.x;
+    const startY = isUpStroke ? prevProjected.y + (nextProjected.y - prevProjected.y) * 0.18 : prevProjected.y;
+    const endX = isUpStroke ? prevProjected.x + (nextProjected.x - prevProjected.x) * 0.82 : nextProjected.x;
+    const endY = isUpStroke ? prevProjected.y + (nextProjected.y - prevProjected.y) * 0.82 : nextProjected.y;
+
+    ctx.beginPath();
+    ctx.moveTo(startX, startY);
+    ctx.lineTo(endX, endY);
+    ctx.strokeStyle =
+      isUpStroke
+        ? mixPreviewColor([154, 90, 46], [205, 132, 74], liftRatio * 0.55)
+        : mixPreviewColor([17, 17, 17], [78, 78, 78], liftRatio * 0.24);
+    ctx.globalAlpha = isUpStroke ? 0.68 : clamp(0.94 - liftRatio * 0.38 + layerRatio * 0.08, 0.42, 0.98);
+    ctx.lineWidth = isUpStroke ? 0.9 : clamp(1.2 - liftRatio * 0.36 + layerRatio * 0.1, 0.68, 1.45);
+    ctx.stroke();
+  }
+
+  ctx.globalAlpha = 1;
+}
+
+function drawSolidPreviewScene(width, height) {
+  const margin = 38;
+  const footprintSize =
+    state.formFactor === "cylinder"
+      ? Math.max(1, state.solidRadius) * 2 + state.nozzleDiameter * 6
+      : Math.hypot(Math.max(1, state.solidWidth), Math.max(1, state.solidDepth));
+  const projectedWidth = state.viewMode === "iso" ? footprintSize * Math.cos(Math.PI / 6) * 2 : footprintSize;
+  const zPreviewWeight = state.viewMode === "iso" ? 12 : 1;
+  const projectedHeight =
+    state.viewMode === "iso" ? footprintSize * Math.sin(Math.PI / 6) + getSolidTargetHeight(state) * zPreviewWeight : footprintSize;
+  const scale = Math.min((width - margin * 2) / projectedWidth, (height - margin * 2) / projectedHeight) * 0.88;
+  const centerX = width / 2;
+  const centerY = state.viewMode === "iso" ? height / 2 + getSolidTargetHeight(state) * zPreviewWeight * scale * 0.42 : height / 2;
+  const paths = generateSolidToolpaths(state);
+  const stats = getStats(paths);
+  const footprint = getSolidFootprintPoints(state);
+
+  ctx.save();
+  ctx.strokeStyle = "#d0d0d0";
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  footprint.forEach((point, index) => {
+    const projected = projectSolidPoint(point, state, centerX, centerY, scale);
+    if (index === 0) ctx.moveTo(projected.x, projected.y);
+    else ctx.lineTo(projected.x, projected.y);
+  });
+  ctx.stroke();
+
+  if (state.viewMode === "iso") {
+    const top = footprint.map((point) => ({ ...point, z: getSolidTargetHeight(state) }));
+    ctx.beginPath();
+    top.forEach((point, index) => {
+      const projected = projectSolidPoint(point, state, centerX, centerY, scale);
+      if (index === 0) ctx.moveTo(projected.x, projected.y);
+      else ctx.lineTo(projected.x, projected.y);
+    });
+    ctx.strokeStyle = "#e5e5e5";
+    ctx.stroke();
+  }
+
+  paths.forEach((path, index) => {
+    const stride = Math.max(1, Math.floor(path.points.length / 9000));
+    if (state.formFactor === "cylinder") {
+      drawCylinderPreviewPath(path, centerX, centerY, scale, stride);
+      return;
+    }
+
+    ctx.beginPath();
+    path.points.forEach((point, pointIndex) => {
+      if (pointIndex % stride !== 0 && pointIndex !== path.points.length - 1) return;
+      const projected = projectPreviewPoint(point, path, pointIndex, state, centerX, centerY, scale);
+      if (pointIndex === 0) ctx.moveTo(projected.x, projected.y);
+      else ctx.lineTo(projected.x, projected.y);
+    });
+    ctx.strokeStyle = path.accent ? "#9a5a2e" : index % 2 ? "#555555" : "#111111";
+    ctx.lineWidth = path.accent ? 0.9 : 1.05;
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    ctx.stroke();
+  });
+
+  ctx.fillStyle = "#111";
+  ctx.font = "12px ui-sans-serif, system-ui";
+  const solidLabel =
+    state.formFactor === "cylinder"
+      ? `${getFormFactorName(state.formFactor)} / ${paths.length} layers / ${getCylinderColumnCount(state)} columns`
+      : `${getFormFactorName(state.formFactor)} / ${patternNames[state.patternMode]} / H ${fixed(getSolidTargetHeight(state), 1)} mm`;
+  ctx.fillText(
+    solidLabel,
+    margin,
+    height - margin * 0.62
+  );
+  ctx.restore();
+
+  patternTitle.textContent =
+    state.formFactor === "cylinder" ? getFormFactorName(state.formFactor) : `${getFormFactorName(state.formFactor)} · ${patternNames[state.patternMode]}`;
+  pathCount.textContent = `${paths.length} paths`;
+  lineLength.textContent = `${Math.round(stats.length)} mm`;
 }
 
 function drawPreview() {
@@ -546,6 +1089,11 @@ function drawPreview() {
   const width = rect.width;
   const height = rect.height;
   ctx.clearRect(0, 0, width, height);
+
+  if (isSolidFormFactor(state)) {
+    drawSolidPreviewScene(width, height);
+    return;
+  }
 
   const margin = 38;
   const projectedWidth = state.viewMode === "iso" ? (state.width + state.height) * Math.cos(Math.PI / 6) : state.width;
@@ -603,7 +1151,7 @@ function drawPreview() {
       ctx.lineWidth = path.family === "imageDot" ? clamp(1.2 + brightness * 1.8, 1.2, 3) : clamp(0.55 + brightness * 1.45, 0.55, 2.2);
       ctx.lineCap = "round";
     } else {
-      ctx.strokeStyle = path.family === "weave" ? "#111111" : index % 2 ? "#555555" : "#2b5f55";
+      ctx.strokeStyle = path.family === "weave" ? "#111111" : index % 2 ? "#555555" : "#9a5a2e";
       ctx.lineWidth = path.family === "weave" ? 1.35 : 1;
       ctx.lineCap = "butt";
     }
@@ -743,7 +1291,181 @@ function formatEstimatedTime(minutes) {
   return `${remainingMinutes}분`;
 }
 
+function getSolidLayerIndex(z, params) {
+  const layerHeight = Math.max(0.05, params.layerHeight || state.layerHeight);
+  return Math.max(0, Math.floor((z + 0.0001) / layerHeight) - 1);
+}
+
+function getSolidFootprintSummary(params) {
+  if (params.formFactor === "cylinder") {
+    return `Cylinder R${fixed(params.solidRadius, 1)} x H${fixed(getSolidTargetHeight(params), 1)} mm`;
+  }
+
+  return `Cube ${fixed(params.solidWidth, 1)} x ${fixed(params.solidDepth, 1)} x ${fixed(getSolidTargetHeight(params), 1)} mm`;
+}
+
+function getCylinderLoopMoveTuning(prevPoint, nextPoint, params) {
+  if (params.formFactor !== "cylinder") {
+    return { extrusionScale: 1, speed: params.printSpeed };
+  }
+
+  if (nextPoint.strokeType === "up") {
+    const upBoost = clamp(params.cylinderUpExtrusionBoost || state.cylinderUpExtrusionBoost || 1.12, 1, 1.6);
+    return { extrusionScale: upBoost, speed: clamp(params.printSpeed * 0.9, 300, params.printSpeed) };
+  }
+
+  if (nextPoint.strokeType === "down") {
+    return { extrusionScale: 0.96, speed: params.printSpeed };
+  }
+
+  const extrusionScale = 1;
+  const speed = params.printSpeed;
+
+  return { extrusionScale, speed };
+}
+
+function generateSolidGcode(params) {
+  const solidPaths = generateSolidToolpaths(params);
+  const solidLayerCount = getSolidLayerCount(params);
+  const lines = [
+    "; Generated by G-CODE TOOL",
+    "; Mode: Solid Geometry",
+    `; Form factor: ${params.formFactor}`,
+    `; Pattern: ${patternNames[params.patternMode]}`,
+    `; Footprint: ${getSolidFootprintSummary(params)}`,
+    `; Layers: ${fixed(solidLayerCount, 0)}`,
+    `; Layer height: ${fixed(params.layerHeight, 2)} mm`,
+    `; Total height: ${fixed(getSolidTargetHeight(params), 2)} mm`,
+    ...getStartMacro(params),
+  ];
+
+  let totalExtrusion = 0;
+  let totalMoves = 0;
+  let totalPrintDistance = 0;
+  let totalTravelDistance = 0;
+  let retractionCount = 0;
+  let currentPosition = null;
+  let hasPrintedPath = false;
+  let announcedLayer = 0;
+  const isContinuousCylinder = params.formFactor === "cylinder";
+  const shouldRetract = params.retractionLength > 0 && !isContinuousCylinder;
+
+  if (isContinuousCylinder) {
+    lines.push("; Continuous vertical zig-zag cylinder path");
+    lines.push(`M106 S${getSafeFanSpeed(params)} ; cooling fan for continuous knit`);
+  } else {
+    lines.push("G92 E0");
+    lines.push(";LAYER:0");
+    lines.push(`;Z:${fixed(params.layerHeight, 3)}`);
+    lines.push(`G1 Z${fixed(params.layerHeight)} F600`);
+    lines.push("M106 S0 ; turn off fan for layer 0 root adhesion");
+  }
+
+  solidPaths.forEach((path, pathIndex) => {
+    if (!path.points || path.points.length < 2) return;
+
+    const startPoint = path.points[0];
+    const start = pointToMachine(startPoint, params);
+    const startZ = startPoint.z || params.layerHeight;
+
+    lines.push(`; path ${pathIndex + 1} / ${solidPaths.length} (${path.family})`);
+    if (hasPrintedPath && shouldRetract) {
+      lines.push(getRetractionMove(params, -1));
+      retractionCount += 1;
+    }
+    if (currentPosition) {
+      const transitionDistance = getPointDistance(currentPosition, { x: start.x, y: start.y, z: startZ });
+      if (isContinuousCylinder) {
+        const transitionExtrusion = extrusionForDistance(transitionDistance, params);
+        totalExtrusion += transitionExtrusion;
+        totalPrintDistance += transitionDistance;
+        totalMoves += 1;
+        lines.push(
+          `G1 X${fixed(start.x)} Y${fixed(start.y)} Z${fixed(startZ)} E${fixed(transitionExtrusion, 5)} F${fixed(params.printSpeed, 0)}`
+        );
+      } else {
+        totalTravelDistance += transitionDistance;
+      }
+    }
+    if (!currentPosition || !isContinuousCylinder) {
+      lines.push(`G0 X${fixed(start.x)} Y${fixed(start.y)} Z${fixed(startZ)} F${fixed(params.travelSpeed, 0)}`);
+    }
+    if (hasPrintedPath && shouldRetract) {
+      lines.push(getRetractionMove(params, 1));
+    }
+
+    for (let i = 1; i < path.points.length; i += 1) {
+      const prevLocal = path.points[i - 1];
+      const nextLocal = path.points[i];
+      const prev = pointToMachine(prevLocal, params);
+      const next = pointToMachine(nextLocal, params);
+      const nextZ = nextLocal.z || params.layerHeight;
+      const nextLayer = Math.min(solidLayerCount - 1, getSolidLayerIndex(nextZ, params));
+
+      while (!isContinuousCylinder && nextLayer > announcedLayer) {
+        announcedLayer += 1;
+        lines.push(`;LAYER:${announcedLayer}`);
+        lines.push("G92 E0");
+        lines.push(`;Z:${fixed(Math.min(nextZ, getSolidTargetHeight(params)), 3)}`);
+        if (announcedLayer === 1) {
+          lines.push(`M106 S${getSafeFanSpeed(params)} ; enable cooling fan from layer 1`);
+        }
+      }
+
+      const distance = getPointDistance(
+        { x: prev.x, y: prev.y, z: prevLocal.z || params.layerHeight },
+        { x: next.x, y: next.y, z: nextZ }
+      );
+      const moveTuning = getCylinderLoopMoveTuning(prevLocal, nextLocal, params);
+      const extrusion = extrusionForDistance(distance, params) * moveTuning.extrusionScale;
+      totalExtrusion += extrusion;
+      totalPrintDistance += distance;
+      totalMoves += 1;
+      lines.push(
+        `G1 X${fixed(next.x)} Y${fixed(next.y)} Z${fixed(nextZ)} E${fixed(extrusion, 5)} F${fixed(moveTuning.speed, 0)}`
+      );
+    }
+
+    const lastPoint = path.points[path.points.length - 1];
+    const last = pointToMachine(lastPoint, params);
+    currentPosition = { x: last.x, y: last.y, z: lastPoint.z || params.layerHeight };
+    hasPrintedPath = true;
+  });
+
+  const filamentArea = Math.PI * (params.filamentDiameter / 2) ** 2;
+  const estimatedWeight = (totalExtrusion * filamentArea * params.filamentDensity) / 1000;
+  const retractionDriveTime =
+    shouldRetract && params.retractionSpeed > 0 ? (params.retractionLength / params.retractionSpeed) * 2 : 0;
+  const estimatedMinutes =
+    totalPrintDistance / params.printSpeed +
+    totalTravelDistance / params.travelSpeed +
+    retractionCount * retractionDriveTime;
+  const estimatedTime = formatEstimatedTime(estimatedMinutes);
+
+  lines.push(...getEndMacro(params));
+  lines.push(`; Total extrusion estimate: ${fixed(totalExtrusion, 3)} mm`);
+  lines.push(`; Total print distance: ${fixed(totalPrintDistance, 2)} mm`);
+  lines.push(`; Total travel distance: ${fixed(totalTravelDistance, 2)} mm`);
+  lines.push(`; Retractions: ${retractionCount}`);
+  lines.push(`; Estimated time: ${estimatedTime}`);
+  lines.push(`; Estimated material: ${fixed(estimatedWeight, 2)} g`);
+  lines.push(`; Extrusion moves: ${totalMoves}`);
+  lines.push("; End of G-CODE TOOL file");
+
+  return {
+    text: `${lines.join("\n")}\n`,
+    totalExtrusion,
+    totalMoves,
+    estimatedWeight,
+    estimatedTime,
+  };
+}
+
 function generateGcode(params) {
+  if (isSolidFormFactor(params)) {
+    return generateSolidGcode(params);
+  }
+
   const lines = [
     "; Generated by G-CODE TOOL",
     `; Mode: ${params.workspaceMode === "image" ? "Image Modulation" : "Pure Geometry"}`,
@@ -873,6 +1595,15 @@ function render() {
   updateGcode();
 }
 
+function resetPreviewView() {
+  previewState.zoom = 1.0;
+  previewState.offsetX = 0;
+  previewState.offsetY = 0;
+  previewState.isDragging = false;
+  previewState.startX = 0;
+  previewState.startY = 0;
+}
+
 function syncTotalHeightStep() {
   const layerStep = Number.isFinite(state.layerHeight) && state.layerHeight > 0 ? state.layerHeight : 0.01;
   document.querySelectorAll('[data-param="totalHeight"]').forEach((input) => {
@@ -884,7 +1615,11 @@ function syncTotalHeightStep() {
 
 function syncParamInputs(name, value) {
   document.querySelectorAll(`[data-param="${name}"]`).forEach((input) => {
-    input.value = value;
+    if (input.type === "checkbox") {
+      input.checked = Boolean(value);
+    } else {
+      input.value = value;
+    }
   });
 
   if (name === "totalHeight" || name === "layerHeight") {
@@ -916,12 +1651,27 @@ function syncHeightParams(changedParam) {
 function handleParamInput(event) {
   const input = event.target;
   const name = input.dataset.param;
+
+  if (name === "formFactor") {
+    setFormFactor(input.value);
+    render();
+    return;
+  }
+
+  if (input.type === "checkbox") {
+    state[name] = input.checked;
+    syncParamInputs(name, state[name]);
+    render();
+    return;
+  }
+
   const value = Number(input.value);
   if (!Number.isFinite(value)) return;
 
   state[name] = value;
   syncParamInputs(name, value);
   syncHeightParams(name);
+
   render();
 }
 
@@ -1087,26 +1837,18 @@ window.addEventListener("paste", (event) => {
 });
 
 function setWorkspaceMode(mode) {
-  state.workspaceMode = mode;
-  geometryControlsPanel.classList.toggle("hidden", mode !== "geometry");
-  imageControlsPanel.classList.toggle("hidden", mode !== "image");
-  modeSwitchButtons.forEach((button) => {
-    const isActive = button.dataset.workspaceMode === mode;
-    button.classList.toggle("active", isActive);
-    button.setAttribute("aria-pressed", String(isActive));
-  });
-  document.body.dataset.workspaceMode = mode;
-  render();
+  applyWorkspaceRoute(mode, mode === "image" ? "flat" : state.formFactor);
 }
 
-function setViewMode(mode) {
+function setViewMode(mode, shouldRender = true) {
+  resetPreviewView();
   state.viewMode = mode;
   viewModeButtons.forEach((button) => {
     const isActive = button.dataset.viewMode === mode;
     button.classList.toggle("active", isActive);
     button.setAttribute("aria-pressed", String(isActive));
   });
-  render();
+  if (shouldRender) render();
 }
 
 function setSettingsMode(mode) {
@@ -1140,7 +1882,12 @@ settingsModeInputs.forEach((input) => {
 
 modeSwitchButtons.forEach((button) => {
   button.addEventListener("click", () => {
-    setWorkspaceMode(button.dataset.workspaceMode);
+    const targetMode = button.dataset.targetMode;
+    if (targetMode === "image") {
+      applyWorkspaceRoute("image", "flat");
+    } else {
+      applyWorkspaceRoute("geometry", targetMode);
+    }
   });
 });
 
@@ -1155,7 +1902,7 @@ downloadButton.addEventListener("click", () => {
   const blob = new Blob([result.text], { type: "text/plain;charset=utf-8" });
   const link = document.createElement("a");
   const timestamp = new Date().toISOString().slice(0, 19).replaceAll(":", "-");
-  const modeSlug = state.workspaceMode === "image" ? "image-modulation" : state.patternMode;
+  const modeSlug = isSolidFormFactor(state) ? state.formFactor : state.workspaceMode === "image" ? "image-modulation" : state.patternMode;
   link.href = URL.createObjectURL(blob);
   link.download = `g-code-tool-${modeSlug}-${timestamp}.gcode`;
   document.body.append(link);
@@ -1178,8 +1925,53 @@ copyButton.addEventListener("click", async () => {
   }, 1200);
 });
 
-enterGeometryMode.addEventListener("click", () => enterWorkspace("geometry"));
-enterImageMode.addEventListener("click", () => enterWorkspace("image"));
+introFormButtons.forEach((button) => {
+  button.addEventListener("click", () => {
+    enterWorkspace(button.dataset.introMode, button.dataset.introForm);
+  });
+});
+
+canvas.addEventListener(
+  "wheel",
+  (event) => {
+    event.preventDefault();
+    const zoomDelta = event.deltaY < 0 ? 1.12 : 1 / 1.12;
+    previewState.zoom = clamp(previewState.zoom * zoomDelta, 0.5, 12.0);
+    drawPreview();
+  },
+  { passive: false }
+);
+
+canvas.addEventListener("pointerdown", (event) => {
+  if (event.button !== 0) return;
+  previewState.isDragging = true;
+  previewState.startX = event.clientX;
+  previewState.startY = event.clientY;
+  if (typeof canvas.setPointerCapture === "function") {
+    canvas.setPointerCapture(event.pointerId);
+  }
+});
+
+canvas.addEventListener("pointermove", (event) => {
+  if (!previewState.isDragging) return;
+  const deltaX = event.clientX - previewState.startX;
+  const deltaY = event.clientY - previewState.startY;
+  previewState.offsetX += deltaX;
+  previewState.offsetY += deltaY;
+  previewState.startX = event.clientX;
+  previewState.startY = event.clientY;
+  drawPreview();
+});
+
+function stopPreviewDrag(event) {
+  previewState.isDragging = false;
+  if (event && typeof canvas.releasePointerCapture === "function" && canvas.hasPointerCapture(event.pointerId)) {
+    canvas.releasePointerCapture(event.pointerId);
+  }
+}
+
+canvas.addEventListener("pointerup", stopPreviewDrag);
+canvas.addEventListener("pointerleave", stopPreviewDrag);
 
 window.addEventListener("resize", () => {
   drawPreview();
@@ -1187,5 +1979,5 @@ window.addEventListener("resize", () => {
 });
 
 startIntroAnimation();
+applyWorkspaceRoute(state.workspaceMode, state.formFactor);
 setSettingsMode("basic");
-render();
