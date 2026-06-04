@@ -42,31 +42,31 @@ const state = {
   cylinderBaseLayers: 3,
   cylinderUpExtrusionBoost: 1.12,
   density: 1.6,
-  spacing: 7.5,
+  spacing: 4.2,
   crossAngle: 90,
   weaveAmplitude: 1.4,
   useGradient: false,
   gradientStrength: 1.0,
   useZMod: false,
-  zModAmplitude: 0.15,
+  zModAmplitude: 0.8,
   zModFrequency: 0.5,
   imageStrength: 1.0,
   travelSpeed: 7200,
-  printSpeed: 1800,
-  extrusionMultiplier: 0.92,
+  printSpeed: 900,
+  extrusionMultiplier: 1.15,
   fanSpeed: 255,
   retractionLength: 1.0,
   retractionSpeed: 1800,
-  layerHeight: 0.28,
+  layerHeight: 0.32,
   layers: 4,
-  totalHeight: 1.12,
+  totalHeight: 1.28,
   nozzleDiameter: 0.4,
   filamentDiameter: 1.75,
   filamentDensity: 1.24,
   skirtCount: 2,
   skirtDistance: 5.0,
-  bedTemp: 60,
-  nozzleTemp: 210,
+  bedTemp: 65,
+  nozzleTemp: 235,
   originX: 128,
   originY: 128,
   macroPreset: "minimal",
@@ -81,16 +81,231 @@ const patternNames = {
   mesh: "미세 메시",
 };
 
-const filamentPresets = {
-  pla: { nozzleTemp: 220, bedTemp: 55, printSpeed: 1800, extrusionMultiplier: 0.98, filamentDensity: 1.24, fanSpeed: 255 },
-  petg: { nozzleTemp: 255, bedTemp: 70, printSpeed: 1200, extrusionMultiplier: 0.93, filamentDensity: 1.27, fanSpeed: 102 },
-  abs: { nozzleTemp: 260, bedTemp: 90, printSpeed: 2100, extrusionMultiplier: 0.95, filamentDensity: 1.04, fanSpeed: 0 },
-  tpu: { nozzleTemp: 230, bedTemp: 35, printSpeed: 720, extrusionMultiplier: 1.02, filamentDensity: 1.21, fanSpeed: 128 },
-  silkPla: { nozzleTemp: 230, bedTemp: 55, printSpeed: 1200, extrusionMultiplier: 0.97, filamentDensity: 1.24, fanSpeed: 255 },
-  carbonPla: { nozzleTemp: 235, bedTemp: 55, printSpeed: 1600, extrusionMultiplier: 0.95, filamentDensity: 1.3, fanSpeed: 153 },
+const ultraWeave04Process = {
+  nozzleDiameter: 0.4,
+  layerHeight: 0.32,
+  travelSpeed: 6000,
+  spacing: 4.2,
+  useZMod: true,
+  zModAmplitude: 0.8,
 };
 
-const filamentPresetParams = ["nozzleTemp", "bedTemp", "printSpeed", "extrusionMultiplier", "filamentDensity", "fanSpeed"];
+const filamentPresets = {
+  pla: {
+    ...ultraWeave04Process,
+    nozzleTemp: 230,
+    bedTemp: 65,
+    printSpeed: 900,
+    extrusionMultiplier: 1.15,
+    filamentDensity: 1.24,
+    fanSpeed: 255,
+  },
+  petg: {
+    ...ultraWeave04Process,
+    nozzleTemp: 265,
+    bedTemp: 75,
+    printSpeed: 720,
+    extrusionMultiplier: 1.12,
+    filamentDensity: 1.27,
+    fanSpeed: 102,
+  },
+  abs: {
+    ...ultraWeave04Process,
+    nozzleTemp: 270,
+    bedTemp: 100,
+    printSpeed: 900,
+    extrusionMultiplier: 1.12,
+    filamentDensity: 1.04,
+    fanSpeed: 0,
+  },
+  tpu: {
+    ...ultraWeave04Process,
+    nozzleTemp: 235,
+    bedTemp: 45,
+    printSpeed: 600,
+    extrusionMultiplier: 1.15,
+    filamentDensity: 1.21,
+    fanSpeed: 128,
+  },
+  silkPla: {
+    ...ultraWeave04Process,
+    nozzleTemp: 240,
+    bedTemp: 65,
+    printSpeed: 800,
+    extrusionMultiplier: 1.18,
+    filamentDensity: 1.24,
+    fanSpeed: 255,
+  },
+  carbonPla: {
+    ...ultraWeave04Process,
+    nozzleTemp: 245,
+    bedTemp: 65,
+    printSpeed: 850,
+    extrusionMultiplier: 1.12,
+    filamentDensity: 1.3,
+    fanSpeed: 153,
+  },
+  "ultraWeave0.4": {
+    ...ultraWeave04Process,
+    nozzleTemp: 235,
+    bedTemp: 65,
+    printSpeed: 900,
+    extrusionMultiplier: 1.15,
+    filamentDensity: 1.24,
+    fanSpeed: 255,
+  },
+};
+
+const filamentPresetParams = [
+  "nozzleTemp",
+  "bedTemp",
+  "printSpeed",
+  "travelSpeed",
+  "extrusionMultiplier",
+  "filamentDensity",
+  "fanSpeed",
+  "nozzleDiameter",
+  "layerHeight",
+  "spacing",
+  "useZMod",
+  "zModAmplitude",
+];
+
+const referenceCylinderA104Gcode =
+  typeof window !== "undefined" && typeof window.REFERENCE_CYLINDER_A1_04_GCODE === "string"
+    ? window.REFERENCE_CYLINDER_A1_04_GCODE
+    : "";
+const referenceCubeA104Gcode =
+  typeof window !== "undefined" && typeof window.REFERENCE_CUBE_A1_04_GCODE === "string"
+    ? window.REFERENCE_CUBE_A1_04_GCODE
+    : "";
+let referenceCylinderA104Cache = null;
+let referenceCubeA104Cache = null;
+
+function parseReferenceA104Data(gcode, family) {
+  if (!gcode) return null;
+  const points = [];
+  let inModel = false;
+  let feed = 0;
+  let position = { x: 128, y: 128, z: 0 };
+  let totalExtrusion = 0;
+  let totalPrintDistance = 0;
+  let totalPrintMinutes = 0;
+  let minX = Infinity;
+  let maxX = -Infinity;
+  let minY = Infinity;
+  let maxY = -Infinity;
+  let maxZ = 0;
+
+  const createPreviewPoint = (machinePoint, strokeType, extrusion = 0) => ({
+    x: machinePoint.x - 128,
+    y: machinePoint.y - 128,
+    z: machinePoint.z,
+    zBase: machinePoint.z,
+    loopLift: strokeType === "up" ? 1 : 0,
+    strokeType,
+    extrusion,
+    feed,
+  });
+
+  gcode.split(/\r?\n/).forEach((line) => {
+    if (line.includes("; ===== begin model =====")) {
+      inModel = true;
+      return;
+    }
+    if (line.includes("; ===== End sequence =====")) {
+      inModel = false;
+      return;
+    }
+    if (!inModel || !/^G[01]\s/.test(line)) return;
+
+    const words = {};
+    line.replace(/([XYZEF])(-?\d+(?:\.\d+)?)/g, (match, key, value) => {
+      words[key.toLowerCase()] = Number(value);
+      return match;
+    });
+    if (Number.isFinite(words.f)) feed = words.f;
+
+    const next = {
+      x: Number.isFinite(words.x) ? words.x : position.x,
+      y: Number.isFinite(words.y) ? words.y : position.y,
+      z: Number.isFinite(words.z) ? words.z : position.z,
+    };
+    const extrusion = Number.isFinite(words.e) ? words.e : 0;
+
+    if (extrusion > 0) {
+      const distance = getPointDistance(position, next);
+      const planarDistance = Math.hypot(next.x - position.x, next.y - position.y);
+      const zDelta = next.z - position.z;
+      const strokeType = planarDistance < 0.05 && zDelta > 0 ? "up" : zDelta < 0 ? "down" : "reference";
+
+      if (!points.length) points.push(createPreviewPoint(position, strokeType));
+      points.push(createPreviewPoint(next, strokeType, extrusion));
+      totalExtrusion += extrusion;
+      totalPrintDistance += distance;
+      if (feed > 0) totalPrintMinutes += distance / feed;
+      minX = Math.min(minX, next.x);
+      maxX = Math.max(maxX, next.x);
+      minY = Math.min(minY, next.y);
+      maxY = Math.max(maxY, next.y);
+      maxZ = Math.max(maxZ, next.z);
+    }
+
+    position = next;
+  });
+
+  const radius = Math.max(maxX - minX, maxY - minY) / 2;
+  const width = maxX - minX;
+  const depth = maxY - minY;
+  const filamentArea = Math.PI * (state.filamentDiameter / 2) ** 2;
+  const estimatedWeight = (totalExtrusion * filamentArea * state.filamentDensity) / 1000;
+  const paths = [{ points, family, accent: false, layerIndex: 0, continuous: true }];
+
+  return {
+    text: gcode,
+    paths,
+    radius,
+    width,
+    depth,
+    height: maxZ,
+    totalExtrusion,
+    totalMoves: Math.max(0, points.length - 1),
+    totalPrintDistance,
+    estimatedWeight,
+    estimatedTime: formatEstimatedTime(totalPrintMinutes),
+  };
+}
+
+function getReferenceCylinderA104Data() {
+  if (referenceCylinderA104Cache) return referenceCylinderA104Cache;
+  referenceCylinderA104Cache = parseReferenceA104Data(referenceCylinderA104Gcode, "referenceCylinder04");
+  return referenceCylinderA104Cache;
+}
+
+function getReferenceCubeA104Data() {
+  if (referenceCubeA104Cache) return referenceCubeA104Cache;
+  referenceCubeA104Cache = parseReferenceA104Data(referenceCubeA104Gcode, "referenceCube04");
+  return referenceCubeA104Cache;
+}
+
+function getReferenceA104DataForFormFactor(formFactor) {
+  if (formFactor === "cylinder") return getReferenceCylinderA104Data();
+  if (formFactor === "cube") return getReferenceCubeA104Data();
+  return null;
+}
+
+function getReferenceA104Result(formFactor) {
+  const reference = getReferenceA104DataForFormFactor(formFactor);
+  if (!reference) return null;
+  return {
+    text: reference.text,
+    totalExtrusion: reference.totalExtrusion,
+    totalMoves: reference.totalMoves,
+    estimatedWeight: reference.estimatedWeight,
+    estimatedTime: reference.estimatedTime,
+  };
+}
+
 const introPalette = [
   "rgba(17, 17, 17, 0.52)",
   "rgba(85, 85, 85, 0.38)",
@@ -500,6 +715,44 @@ function generateImageModulationPaths(params, layerIndex = 0) {
 }
 
 function generateSkirtPaths(params) {
+  const isCircularSolid = params.formFactor === "cylinder" || params.formFactor === "solid";
+  if (isCircularSolid) {
+    const nozzleDiameter = Math.max(0.1, params.nozzleDiameter || state.nozzleDiameter);
+    const radius = Math.max(nozzleDiameter, params.solidRadius || state.solidRadius);
+    const z = Math.max(0.05, params.layerHeight || state.layerHeight);
+    const requestedCount = Math.max(
+      1,
+      Math.round(Number.isFinite(params.cylinderBaseLayers) ? params.cylinderBaseLayers : 3)
+    );
+    const count = Math.min(3, requestedCount);
+    const outerRadius = radius + nozzleDiameter * (count - 1);
+    const sampleCount = Math.max(180, Math.ceil((Math.PI * 2 * outerRadius) / nozzleDiameter));
+    const paths = [];
+
+    for (let loopIndex = 0; loopIndex < count; loopIndex += 1) {
+      const loopRadius = radius + nozzleDiameter * (count - 1 - loopIndex);
+      const points = [];
+
+      for (let sampleIndex = 0; sampleIndex <= sampleCount; sampleIndex += 1) {
+        const theta = (sampleIndex / sampleCount) * Math.PI * 2;
+        points.push({
+          x: Math.cos(theta) * loopRadius,
+          y: Math.sin(theta) * loopRadius,
+          z,
+          theta,
+          radius: loopRadius,
+          layerIndex: 0,
+          strokeType: "base",
+          strokeProgress: sampleIndex / sampleCount,
+        });
+      }
+
+      paths.push({ points, family: "circularBrim", accent: false, layerIndex: 0 });
+    }
+
+    return paths;
+  }
+
   const paths = [];
   const count = Math.max(0, Math.round(params.skirtCount));
   const stepOut = params.nozzleDiameter * 1.2;
@@ -598,14 +851,25 @@ function getSolidZ(params, layerIndex, layerProgress) {
 
 function generateSolidToolpaths(params) {
   if (params.formFactor === "cylinder") {
+    const reference = getReferenceCylinderA104Data();
+    if (reference) return reference.paths;
+    if (isUltraWeavePreset(params)) {
+      return generateCylinderSpiralToolpaths(params);
+    }
     return generateCylinderToolpaths(params);
   }
 
   if (params.formFactor === "cube") {
+    const reference = getReferenceCubeA104Data();
+    if (reference) return reference.paths;
     return generateCubeToolpaths(params);
   }
 
   return [];
+}
+
+function isUltraWeavePreset(params) {
+  return params.filamentPreset === "ultraWeave0.4";
 }
 
 function getSolidSurfaceSpacing(params) {
@@ -622,7 +886,13 @@ function getSolidPatternFrequency(params) {
 
 function getCylinderColumnCount(params) {
   const frequency = getSolidPatternFrequency(params);
-  return Math.max(2, Math.round(frequency * 2));
+  const radius = Math.max(1, params.solidRadius || state.solidRadius);
+  const nozzleDiameter = Math.max(0.2, params.nozzleDiameter || state.nozzleDiameter);
+  const circumference = Math.PI * 2 * radius;
+  const requestedSpacing = Math.max(nozzleDiameter * 2, params.spacing || state.spacing);
+  const spacingLimitedColumns = Math.max(4, Math.floor(circumference / requestedSpacing));
+  const lowFrequencyColumns = Math.max(4, Math.round(frequency * 2));
+  return Math.min(spacingLimitedColumns, lowFrequencyColumns);
 }
 
 function getCylinderVerticalSteps(params, solidHeight) {
@@ -753,56 +1023,25 @@ function generateCylinderToolpaths(params) {
   const radius = Math.max(1, params.solidRadius || state.solidRadius);
   const minZ = Math.max(0.05, params.layerHeight || state.layerHeight);
   const layerHeight = Math.max(0.05, params.layerHeight || state.layerHeight);
-  const localLift = layerHeight;
+  const nozzleDiameter = Math.max(0.2, params.nozzleDiameter || state.nozzleDiameter);
+  const localLift = clamp(params.weaveAmplitude || state.weaveAmplitude, 0.5, 1.4);
+  const minimumPitch = Math.max(layerHeight, nozzleDiameter * 1.1);
+  const maximumPitch = Math.max(minimumPitch, localLift * 0.75);
+  const verticalPitch = clamp((params.spacing || state.spacing) * 0.08, minimumPitch, maximumPitch);
   const diagonalRadius = radius + localLift * 0.3;
   const segments = getCylinderColumnCount(params);
-  const layerCount = getSolidLayerCount(params);
-  const upSteps = Math.max(2, Math.ceil(localLift / Math.max(0.05, layerHeight * 0.5)));
-  const downSteps = Math.max(4, upSteps * 2);
-  const layerBuildStep = layerHeight / segments;
+  const solidHeight = getSolidTargetHeight(params);
+  const layerCount = Math.max(1, Math.floor(Math.max(0, solidHeight - minZ - localLift) / verticalPitch) + 1);
+  const zSampleStep = clamp(localLift / 6, 0.18, 0.3);
+  const layerBuildStep = verticalPitch / segments;
+  const upSteps = Math.max(2, Math.round(localLift / zSampleStep));
+  const downSteps = Math.max(2, Math.round((localLift - layerBuildStep) / zSampleStep));
   const segmentAngle = (Math.PI * 2) / segments;
-  const seamTheta = (segments - 1) * segmentAngle;
   const baseEnabled = params.cylinderBaseEnabled !== false;
-  const requestedBaseLayers = Math.max(
-    0,
-    Math.round(Number.isFinite(params.cylinderBaseLayers) ? params.cylinderBaseLayers : state.cylinderBaseLayers)
-  );
-  const baseLayerCount = baseEnabled ? Math.min(requestedBaseLayers, Math.max(0, layerCount - 1)) : 0;
-  const baseSamples = Math.max(96, segments * 12);
-  const paths = [];
+  const paths = baseEnabled ? generateSkirtPaths(params) : [];
 
-  for (let baseIndex = 0; baseIndex < baseLayerCount; baseIndex += 1) {
-    const zBase = minZ + baseIndex * layerHeight;
-    const points = [];
-
-    for (let sampleIndex = 0; sampleIndex <= baseSamples; sampleIndex += 1) {
-      const progress = sampleIndex / baseSamples;
-      const theta = seamTheta - progress * Math.PI * 2;
-      points.push({
-        x: Math.cos(theta) * radius,
-        y: Math.sin(theta) * radius,
-        z: zBase,
-        zBase,
-        layerBase: zBase,
-        theta,
-        zPhase: baseIndex * Math.PI,
-        wave: -1,
-        radialCushion: 0,
-        radius,
-        loopLift: 0,
-        columnIndex: sampleIndex,
-        layerIndex: baseIndex,
-        strokeType: "base",
-        heightProgress: clamp((zBase - minZ) / Math.max(0.001, getSolidTargetHeight(params) - minZ), 0, 1),
-        strokeProgress: progress,
-      });
-    }
-
-    paths.push({ points, family: "cylinderBaseStack", accent: false, layerIndex: baseIndex });
-  }
-
-  for (let layerIndex = baseLayerCount; layerIndex < layerCount; layerIndex += 1) {
-    const zBase = minZ + layerIndex * layerHeight;
+  for (let layerIndex = 0; layerIndex < layerCount; layerIndex += 1) {
+    const zBase = minZ + layerIndex * verticalPitch;
     const points = [];
 
     const pushPolarPoint = ({ theta, zHeight, segmentBase, segmentIndex, strokeType, progress, pointRadius }) => {
@@ -828,15 +1067,16 @@ function generateCylinderToolpaths(params) {
       });
     };
 
-    for (let segmentIndex = segments - 1; segmentIndex >= 0; segmentIndex -= 1) {
-      const segmentOrder = segments - 1 - segmentIndex;
+    for (let segmentOrder = 0; segmentOrder < segments; segmentOrder += 1) {
+      const segmentIndex = (segments - segmentOrder) % segments;
       const segmentBase = zBase + segmentOrder * layerBuildStep;
       const handoffBase = segmentBase + layerBuildStep;
       const segmentTop = segmentBase + localLift;
-      const theta = segmentIndex * segmentAngle;
+      const theta = -segmentOrder * segmentAngle;
       const prevTheta = theta - segmentAngle;
 
-      for (let upIndex = 0; upIndex <= upSteps; upIndex += 1) {
+      const upStartIndex = segmentOrder === 0 ? 0 : 1;
+      for (let upIndex = upStartIndex; upIndex <= upSteps; upIndex += 1) {
         const upProgress = upIndex / upSteps;
         pushPolarPoint({
           theta,
@@ -867,6 +1107,66 @@ function generateCylinderToolpaths(params) {
   }
 
   return paths;
+}
+
+function getCylinderSpiralTurnCount(params) {
+  const minZ = Math.max(0.05, params.layerHeight || state.layerHeight);
+  const solidHeight = getSolidTargetHeight(params);
+  const spiralPitch = Math.max(minZ, params.spacing || state.spacing);
+  return Math.max(1, Math.ceil(Math.max(0.001, solidHeight - minZ) / spiralPitch));
+}
+
+function generateCylinderSpiralToolpaths(params) {
+  const radius = Math.max(1, params.solidRadius || state.solidRadius);
+  const minZ = Math.max(0.05, params.layerHeight || state.layerHeight);
+  const solidHeight = getSolidTargetHeight(params);
+  const heightRange = Math.max(0.001, solidHeight - minZ);
+  const amplitude = clamp(params.zModAmplitude || state.zModAmplitude, 0.05, 1.4);
+  const waveFrequency = Math.max(1, Math.round(getSolidPatternFrequency(params) * 0.5));
+  const totalTurns = getCylinderSpiralTurnCount(params);
+  const totalAngle = totalTurns * Math.PI * 2;
+  const circumference = Math.PI * 2 * radius;
+  const nozzleDiameter = Math.max(0.2, params.nozzleDiameter || state.nozzleDiameter);
+  const samplesPerTurn = Math.max(120, Math.ceil(circumference / Math.max(0.6, nozzleDiameter * 1.5)));
+  const totalSamples = totalTurns * samplesPerTurn;
+  const baseEnabled = params.cylinderBaseEnabled !== false;
+  const points = baseEnabled ? generateSkirtPaths(params).flatMap((path) => path.points.map((point) => ({ ...point }))) : [];
+
+  for (let sampleIndex = 0; sampleIndex <= totalSamples; sampleIndex += 1) {
+    const progress = sampleIndex / totalSamples;
+    const cumulativeAngle = progress * totalAngle;
+    const wavePhase = cumulativeAngle * waveFrequency;
+    const wave = Math.sin(wavePhase);
+    const waveSlope = Math.cos(wavePhase);
+    const baseZ = minZ + progress * heightRange;
+    const z = clamp(baseZ + wave * amplitude, minZ, solidHeight);
+    const layerIndex = Math.min(totalTurns - 1, Math.floor(progress * totalTurns));
+    const point = {
+      x: Math.cos(cumulativeAngle) * radius,
+      y: Math.sin(cumulativeAngle) * radius,
+      z,
+      zBase: baseZ,
+      layerBase: minZ + layerIndex * (heightRange / totalTurns),
+      theta: cumulativeAngle,
+      cumulativeAngle,
+      wave,
+      waveSlope,
+      radius,
+      loopLift: (wave + 1) / 2,
+      columnIndex: sampleIndex % samplesPerTurn,
+      layerIndex,
+      strokeType: "spiral",
+      extrusionPulse: waveSlope >= 0 ? 1.15 : 0.75,
+      heightProgress: progress,
+      strokeProgress: (sampleIndex % samplesPerTurn) / samplesPerTurn,
+    };
+
+    const previous = points[points.length - 1];
+    if (previous && getPointDistance(previous, point) < 0.0001) continue;
+    points.push(point);
+  }
+
+  return [{ points, family: "cylinderSpiral", accent: true, layerIndex: 0, continuous: true }];
 }
 
 function generateCubeToolpaths(params) {
@@ -964,7 +1264,7 @@ function getCylinderPreviewLiftRatio(point) {
   return clamp((point.z - point.zBase) / amplitude, 0, 1);
 }
 
-function drawCylinderPreviewPath(path, centerX, centerY, scale, stride) {
+function drawCylinderPreviewPath(path, centerX, centerY, scale, stride, params = state) {
   const sampledPoints = path.points.filter((point, index) => index % stride === 0 || index === path.points.length - 1);
   if (sampledPoints.length < 2) return;
 
@@ -974,11 +1274,15 @@ function drawCylinderPreviewPath(path, centerX, centerY, scale, stride) {
   for (let index = 1; index < sampledPoints.length; index += 1) {
     const prevPoint = sampledPoints[index - 1];
     const nextPoint = sampledPoints[index];
-    const prevProjected = projectPreviewPoint(prevPoint, path, index - 1, state, centerX, centerY, scale);
-    const nextProjected = projectPreviewPoint(nextPoint, path, index, state, centerX, centerY, scale);
+    const prevProjected = projectPreviewPoint(prevPoint, path, index - 1, params, centerX, centerY, scale);
+    const nextProjected = projectPreviewPoint(nextPoint, path, index, params, centerX, centerY, scale);
     const liftRatio = (getCylinderPreviewLiftRatio(prevPoint) + getCylinderPreviewLiftRatio(nextPoint)) / 2;
-    const layerRatio = clamp(((prevPoint.z || 0) + (nextPoint.z || 0)) / Math.max(1, getSolidTargetHeight(state) * 2), 0, 1);
+    const layerRatio = clamp(((prevPoint.z || 0) + (nextPoint.z || 0)) / Math.max(1, getSolidTargetHeight(params) * 2), 0, 1);
     const isUpStroke = nextPoint.strokeType === "up";
+    const isSpiral = nextPoint.strokeType === "spiral";
+    const isReference = path.family === "referenceCylinder04" || path.family === "referenceCube04";
+    const isRisingSpiral = isSpiral && nextPoint.waveSlope >= 0;
+    const useRisingStyle = isUpStroke || isRisingSpiral;
     const startX = isUpStroke ? prevProjected.x + (nextProjected.x - prevProjected.x) * 0.18 : prevProjected.x;
     const startY = isUpStroke ? prevProjected.y + (nextProjected.y - prevProjected.y) * 0.18 : prevProjected.y;
     const endX = isUpStroke ? prevProjected.x + (nextProjected.x - prevProjected.x) * 0.82 : nextProjected.x;
@@ -988,11 +1292,27 @@ function drawCylinderPreviewPath(path, centerX, centerY, scale, stride) {
     ctx.moveTo(startX, startY);
     ctx.lineTo(endX, endY);
     ctx.strokeStyle =
-      isUpStroke
+      useRisingStyle
         ? mixPreviewColor([154, 90, 46], [205, 132, 74], liftRatio * 0.55)
         : mixPreviewColor([17, 17, 17], [78, 78, 78], liftRatio * 0.24);
-    ctx.globalAlpha = isUpStroke ? 0.68 : clamp(0.94 - liftRatio * 0.38 + layerRatio * 0.08, 0.42, 0.98);
-    ctx.lineWidth = isUpStroke ? 0.9 : clamp(1.2 - liftRatio * 0.36 + layerRatio * 0.1, 0.68, 1.45);
+    ctx.globalAlpha = isSpiral
+      ? 0.92
+      : isReference
+        ? 0.92
+      : isUpStroke
+        ? 0.68
+        : clamp(0.94 - liftRatio * 0.38 + layerRatio * 0.08, 0.42, 0.98);
+    ctx.lineWidth = isReference
+      ? isUpStroke
+        ? 1.1
+        : 0.84
+      : isSpiral
+      ? isRisingSpiral
+        ? 1.08
+        : 0.82
+      : isUpStroke
+        ? 0.9
+        : clamp(1.2 - liftRatio * 0.36 + layerRatio * 0.1, 0.68, 1.45);
     ctx.stroke();
   }
 
@@ -1001,37 +1321,48 @@ function drawCylinderPreviewPath(path, centerX, centerY, scale, stride) {
 
 function drawSolidPreviewScene(width, height) {
   const margin = 38;
+  const reference = getReferenceA104DataForFormFactor(state.formFactor);
+  const previewParams = reference
+    ? {
+        ...state,
+        solidRadius: reference.radius,
+        solidWidth: reference.width,
+        solidDepth: reference.depth,
+        solidHeight: reference.height,
+      }
+    : state;
   const footprintSize =
     state.formFactor === "cylinder"
-      ? Math.max(1, state.solidRadius) * 2 + state.nozzleDiameter * 6
+      ? Math.max(1, previewParams.solidRadius) * 2 + previewParams.nozzleDiameter * 6
       : Math.hypot(Math.max(1, state.solidWidth), Math.max(1, state.solidDepth));
   const projectedWidth = state.viewMode === "iso" ? footprintSize * Math.cos(Math.PI / 6) * 2 : footprintSize;
   const zPreviewWeight = state.viewMode === "iso" ? 12 : 1;
   const projectedHeight =
-    state.viewMode === "iso" ? footprintSize * Math.sin(Math.PI / 6) + getSolidTargetHeight(state) * zPreviewWeight : footprintSize;
+    state.viewMode === "iso" ? footprintSize * Math.sin(Math.PI / 6) + getSolidTargetHeight(previewParams) * zPreviewWeight : footprintSize;
   const scale = Math.min((width - margin * 2) / projectedWidth, (height - margin * 2) / projectedHeight) * 0.88;
   const centerX = width / 2;
-  const centerY = state.viewMode === "iso" ? height / 2 + getSolidTargetHeight(state) * zPreviewWeight * scale * 0.42 : height / 2;
-  const paths = generateSolidToolpaths(state);
+  const centerY =
+    state.viewMode === "iso" ? height / 2 + getSolidTargetHeight(previewParams) * zPreviewWeight * scale * 0.42 : height / 2;
+  const paths = generateSolidToolpaths(previewParams);
   const stats = getStats(paths);
-  const footprint = getSolidFootprintPoints(state);
+  const footprint = getSolidFootprintPoints(previewParams);
 
   ctx.save();
   ctx.strokeStyle = "#d0d0d0";
   ctx.lineWidth = 1;
   ctx.beginPath();
   footprint.forEach((point, index) => {
-    const projected = projectSolidPoint(point, state, centerX, centerY, scale);
+    const projected = projectSolidPoint(point, previewParams, centerX, centerY, scale);
     if (index === 0) ctx.moveTo(projected.x, projected.y);
     else ctx.lineTo(projected.x, projected.y);
   });
   ctx.stroke();
 
   if (state.viewMode === "iso") {
-    const top = footprint.map((point) => ({ ...point, z: getSolidTargetHeight(state) }));
+    const top = footprint.map((point) => ({ ...point, z: getSolidTargetHeight(previewParams) }));
     ctx.beginPath();
     top.forEach((point, index) => {
-      const projected = projectSolidPoint(point, state, centerX, centerY, scale);
+      const projected = projectSolidPoint(point, previewParams, centerX, centerY, scale);
       if (index === 0) ctx.moveTo(projected.x, projected.y);
       else ctx.lineTo(projected.x, projected.y);
     });
@@ -1041,8 +1372,8 @@ function drawSolidPreviewScene(width, height) {
 
   paths.forEach((path, index) => {
     const stride = Math.max(1, Math.floor(path.points.length / 9000));
-    if (state.formFactor === "cylinder") {
-      drawCylinderPreviewPath(path, centerX, centerY, scale, stride);
+    if (state.formFactor === "cylinder" || path.family === "referenceCube04") {
+      drawCylinderPreviewPath(path, centerX, centerY, scale, stride, previewParams);
       return;
     }
 
@@ -1062,9 +1393,12 @@ function drawSolidPreviewScene(width, height) {
 
   ctx.fillStyle = "#111";
   ctx.font = "12px ui-sans-serif, system-ui";
-  const solidLabel =
-    state.formFactor === "cylinder"
-      ? `${getFormFactorName(state.formFactor)} / ${paths.length} layers / ${getCylinderColumnCount(state)} columns`
+  const solidLabel = reference
+    ? `Reference A1 0.4 ${state.formFactor === "cube" ? "Cube" : "Cylinder"} / ${reference.totalMoves} exact moves / H ${fixed(reference.height, 1)} mm`
+    : state.formFactor === "cylinder"
+      ? isUltraWeavePreset(state)
+        ? `${getFormFactorName(state.formFactor)} / continuous spiral / ${getCylinderSpiralTurnCount(state)} turns`
+        : `${getFormFactorName(state.formFactor)} / ${paths.length} layers / ${getCylinderColumnCount(state)} columns`
       : `${getFormFactorName(state.formFactor)} / ${patternNames[state.patternMode]} / H ${fixed(getSolidTargetHeight(state), 1)} mm`;
   ctx.fillText(
     solidLabel,
@@ -1073,8 +1407,13 @@ function drawSolidPreviewScene(width, height) {
   );
   ctx.restore();
 
-  patternTitle.textContent =
-    state.formFactor === "cylinder" ? getFormFactorName(state.formFactor) : `${getFormFactorName(state.formFactor)} · ${patternNames[state.patternMode]}`;
+  patternTitle.textContent = reference
+    ? `${getFormFactorName(state.formFactor)} · 원본 G-code 0.4 ${state.formFactor === "cube" ? "정사각 투영" : "변환"}`
+    : state.formFactor === "cylinder"
+      ? isUltraWeavePreset(state)
+        ? `${getFormFactorName(state.formFactor)} · 연속 나선 직조`
+        : getFormFactorName(state.formFactor)
+      : `${getFormFactorName(state.formFactor)} · ${patternNames[state.patternMode]}`;
   pathCount.textContent = `${paths.length} paths`;
   lineLength.textContent = `${Math.round(stats.length)} mm`;
 }
@@ -1206,12 +1545,12 @@ function getStartMacro(params) {
 
   return [
     "; Minimal safe start macro",
-    "G90 ; absolute positioning",
-    "M83 ; relative extrusion",
     `M140 S${fixed(params.bedTemp, 0)} ; set bed temperature`,
     `M104 S${fixed(params.nozzleTemp, 0)} ; set nozzle temperature`,
     `M190 S${fixed(params.bedTemp, 0)} ; wait for bed`,
-    `M109 S${fixed(params.nozzleTemp, 0)} ; wait for nozzle`,
+    `M109 S${fixed(params.nozzleTemp, 0)} ; final nozzle temperature check`,
+    "G90 ; absolute positioning",
+    "M83 ; relative extrusion",
     "G28 ; home all axes",
     "G92 E0",
     `G1 Z${fixed(params.layerHeight)} F600`,
@@ -1250,7 +1589,165 @@ function pointToMachine(point, params) {
 function extrusionForDistance(distance, params) {
   const lineArea = params.nozzleDiameter * params.layerHeight;
   const filamentArea = Math.PI * (params.filamentDiameter / 2) ** 2;
-  return (distance * lineArea * params.extrusionMultiplier) / filamentArea;
+  return Math.max(0, Math.abs((distance * lineArea * params.extrusionMultiplier) / filamentArea));
+}
+
+function getPositiveExtrusion(extrusion) {
+  if (!Number.isFinite(extrusion)) return 0;
+  return Math.max(0, Math.abs(extrusion));
+}
+
+function getSegmentIntersection(startA, endA, startB, endB) {
+  const directionAX = endA.x - startA.x;
+  const directionAY = endA.y - startA.y;
+  const directionBX = endB.x - startB.x;
+  const directionBY = endB.y - startB.y;
+  const denominator = directionAX * directionBY - directionAY * directionBX;
+  const epsilon = 0.00001;
+
+  if (Math.abs(denominator) < epsilon) return null;
+
+  const deltaX = startB.x - startA.x;
+  const deltaY = startB.y - startA.y;
+  const tA = (deltaX * directionBY - deltaY * directionBX) / denominator;
+  const tB = (deltaX * directionAY - deltaY * directionAX) / denominator;
+
+  if (tA <= epsilon || tA >= 1 - epsilon || tB <= epsilon || tB >= 1 - epsilon) return null;
+
+  return {
+    x: startA.x + directionAX * tA,
+    y: startA.y + directionAY * tA,
+    tA,
+    tB,
+  };
+}
+
+function preparePathsWithIntersectionFade(paths, params) {
+  if (params.workspaceMode !== "geometry" || paths.length < 2) return paths;
+
+  const splitMarkers = paths.map((path) =>
+    Array.from({ length: Math.max(0, (path.points?.length || 0) - 1) }, () => [])
+  );
+  const pathGeometry = paths.map((path, pathIndex) => {
+    if (path.family === "skirt" || !path.points || path.points.length < 2) return null;
+
+    const segments = [];
+    for (let segmentIndex = 0; segmentIndex < path.points.length - 1; segmentIndex += 1) {
+      const start = path.points[segmentIndex];
+      const end = path.points[segmentIndex + 1];
+      if (Math.hypot(end.x - start.x, end.y - start.y) < 0.0001) continue;
+
+      segments.push({
+        pathIndex,
+        segmentIndex,
+        start,
+        end,
+        minX: Math.min(start.x, end.x),
+        maxX: Math.max(start.x, end.x),
+        minY: Math.min(start.y, end.y),
+        maxY: Math.max(start.y, end.y),
+      });
+    }
+
+    if (!segments.length) return null;
+
+    return {
+      pathIndex,
+      segments,
+      minX: Math.min(...segments.map((segment) => segment.minX)),
+      maxX: Math.max(...segments.map((segment) => segment.maxX)),
+      minY: Math.min(...segments.map((segment) => segment.minY)),
+      maxY: Math.max(...segments.map((segment) => segment.maxY)),
+    };
+  });
+
+  for (let aPathIndex = 0; aPathIndex < pathGeometry.length; aPathIndex += 1) {
+    const pathA = pathGeometry[aPathIndex];
+    if (!pathA) continue;
+
+    for (let bPathIndex = aPathIndex + 1; bPathIndex < pathGeometry.length; bPathIndex += 1) {
+      const pathB = pathGeometry[bPathIndex];
+      if (
+        !pathB ||
+        pathA.maxX < pathB.minX ||
+        pathA.minX > pathB.maxX ||
+        pathA.maxY < pathB.minY ||
+        pathA.minY > pathB.maxY
+      ) {
+        continue;
+      }
+
+      pathA.segments.forEach((segmentA) => {
+        pathB.segments.forEach((segmentB) => {
+          if (
+            segmentA.maxX < segmentB.minX ||
+            segmentA.minX > segmentB.maxX ||
+            segmentA.maxY < segmentB.minY ||
+            segmentA.minY > segmentB.maxY
+          ) {
+            return;
+          }
+
+          const intersection = getSegmentIntersection(segmentA.start, segmentA.end, segmentB.start, segmentB.end);
+          if (!intersection) return;
+
+          splitMarkers[segmentA.pathIndex][segmentA.segmentIndex].push(intersection.tA);
+          splitMarkers[segmentB.pathIndex][segmentB.segmentIndex].push(intersection.tB);
+        });
+      });
+    }
+  }
+
+  const fadeDistance = Math.max(0.5, params.nozzleDiameter * 1.5);
+
+  return paths.map((path, pathIndex) => {
+    if (path.family === "skirt" || !path.points || path.points.length < 2) return path;
+
+    const points = [{ ...path.points[0] }];
+    for (let segmentIndex = 0; segmentIndex < path.points.length - 1; segmentIndex += 1) {
+      const start = path.points[segmentIndex];
+      const end = path.points[segmentIndex + 1];
+      const distance = Math.hypot(end.x - start.x, end.y - start.y);
+      const markers = splitMarkers[pathIndex][segmentIndex];
+
+      if (!markers.length || distance < 0.0001) {
+        points.push({ ...end });
+        continue;
+      }
+
+      const fadeRatio = Math.min(0.45, fadeDistance / distance);
+      const entries = [{ t: 1, intersectionFade: false }];
+      markers.forEach((t) => {
+        entries.push({ t: clamp(t - fadeRatio, 0.00001, 0.99999), intersectionFade: false });
+        entries.push({ t, intersectionFade: true });
+        entries.push({ t: clamp(t + fadeRatio, 0.00001, 0.99999), intersectionFade: false });
+      });
+      entries.sort((a, b) => a.t - b.t);
+
+      const uniqueEntries = [];
+      entries.forEach((entry) => {
+        const previous = uniqueEntries[uniqueEntries.length - 1];
+        if (previous && Math.abs(previous.t - entry.t) < 0.00001) {
+          previous.intersectionFade = previous.intersectionFade || entry.intersectionFade;
+          return;
+        }
+        uniqueEntries.push({ ...entry });
+      });
+
+      uniqueEntries.forEach((entry) => {
+        const point = {
+          ...end,
+          x: start.x + (end.x - start.x) * entry.t,
+          y: start.y + (end.y - start.y) * entry.t,
+        };
+        if (entry.intersectionFade) point.intersectionFade = true;
+        else delete point.intersectionFade;
+        points.push(point);
+      });
+    }
+
+    return { ...path, points };
+  });
 }
 
 function getRetractionMove(params, direction) {
@@ -1304,21 +1801,37 @@ function getSolidFootprintSummary(params) {
   return `Cube ${fixed(params.solidWidth, 1)} x ${fixed(params.solidDepth, 1)} x ${fixed(getSolidTargetHeight(params), 1)} mm`;
 }
 
+function getCylinderBodyFlowScale(point, params) {
+  if (params.formFactor !== "cylinder") return 1;
+  if (isUltraWeavePreset(params)) return 1;
+  return Number.isFinite(point.layerIndex) && point.layerIndex > 0 ? 0.87 : 1;
+}
+
 function getCylinderLoopMoveTuning(prevPoint, nextPoint, params) {
   if (params.formFactor !== "cylinder") {
     return { extrusionScale: 1, speed: params.printSpeed };
   }
 
+  const bodyFlowScale = getCylinderBodyFlowScale(nextPoint, params);
+
+  if (nextPoint.strokeType === "spiral") {
+    const extrusionPulse = nextPoint.extrusionPulse === 1.15 ? 1.15 : 0.75;
+    return {
+      extrusionScale: extrusionPulse * bodyFlowScale,
+      speed: isUltraWeavePreset(params) ? 900 : params.printSpeed,
+    };
+  }
+
   if (nextPoint.strokeType === "up") {
     const upBoost = clamp(params.cylinderUpExtrusionBoost || state.cylinderUpExtrusionBoost || 1.12, 1, 1.6);
-    return { extrusionScale: upBoost, speed: clamp(params.printSpeed * 0.9, 300, params.printSpeed) };
+    return { extrusionScale: upBoost * bodyFlowScale, speed: clamp(params.printSpeed * 0.9, 300, params.printSpeed) };
   }
 
   if (nextPoint.strokeType === "down") {
-    return { extrusionScale: 0.96, speed: params.printSpeed };
+    return { extrusionScale: 0.96 * bodyFlowScale, speed: params.printSpeed };
   }
 
-  const extrusionScale = 1;
+  const extrusionScale = bodyFlowScale;
   const speed = params.printSpeed;
 
   return { extrusionScale, speed };
@@ -1326,7 +1839,12 @@ function getCylinderLoopMoveTuning(prevPoint, nextPoint, params) {
 
 function generateSolidGcode(params) {
   const solidPaths = generateSolidToolpaths(params);
-  const solidLayerCount = getSolidLayerCount(params);
+  const solidLayerCount =
+    params.formFactor === "cylinder"
+      ? isUltraWeavePreset(params)
+        ? getCylinderSpiralTurnCount(params)
+        : Math.max(1, solidPaths.filter((path) => path.family === "cylinderVerticalDrop").length)
+      : getSolidLayerCount(params);
   const lines = [
     "; Generated by G-CODE TOOL",
     "; Mode: Solid Geometry",
@@ -1337,11 +1855,14 @@ function generateSolidGcode(params) {
     `; Layer height: ${fixed(params.layerHeight, 2)} mm`,
     `; Total height: ${fixed(getSolidTargetHeight(params), 2)} mm`,
     ...getStartMacro(params),
+    "M83 ; enforce relative positive extrusion for solid toolpaths",
+    "G92 E0",
   ];
 
   let totalExtrusion = 0;
   let totalMoves = 0;
   let totalPrintDistance = 0;
+  let totalPrintMinutes = 0;
   let totalTravelDistance = 0;
   let retractionCount = 0;
   let currentPosition = null;
@@ -1351,10 +1872,16 @@ function generateSolidGcode(params) {
   const shouldRetract = params.retractionLength > 0 && !isContinuousCylinder;
 
   if (isContinuousCylinder) {
-    lines.push("; Continuous vertical zig-zag cylinder path");
-    lines.push(`M106 S${getSafeFanSpeed(params)} ; cooling fan for continuous knit`);
+    lines.push(
+      isUltraWeavePreset(params)
+        ? "; Continuous Ultra Weave spiral cylinder path"
+        : "; Continuous vertical zig-zag cylinder path"
+    );
+    lines.push(";LAYER:0");
+    lines.push(`;Z:${fixed(params.layerHeight, 3)}`);
+    lines.push("; First layer welding: 135% extrusion at F900");
+    lines.push("M106 S0 ; turn off fan for layer 0 root adhesion");
   } else {
-    lines.push("G92 E0");
     lines.push(";LAYER:0");
     lines.push(`;Z:${fixed(params.layerHeight, 3)}`);
     lines.push(`G1 Z${fixed(params.layerHeight)} F600`);
@@ -1367,6 +1894,27 @@ function generateSolidGcode(params) {
     const startPoint = path.points[0];
     const start = pointToMachine(startPoint, params);
     const startZ = startPoint.z || params.layerHeight;
+    const pathLayerIndex = Number.isFinite(path.layerIndex) ? path.layerIndex : getSolidLayerIndex(startZ, params);
+    const isFirstLayerPath = isContinuousCylinder && pathLayerIndex === 0;
+    const layerExtrusionScale = isFirstLayerPath ? 1.35 : 1;
+    const layerPrintSpeed = isFirstLayerPath ? 900 : params.printSpeed;
+
+    if (isContinuousCylinder) {
+      while (pathLayerIndex > announcedLayer) {
+        announcedLayer += 1;
+        lines.push(`;LAYER:${announcedLayer}`);
+        lines.push("G92 E0");
+        lines.push(`;Z:${fixed(startZ, 3)}`);
+        if (announcedLayer === 1) {
+          lines.push(`M106 S${getSafeFanSpeed(params)} ; enable cooling fan from layer 1`);
+          lines.push(
+            isUltraWeavePreset(params)
+              ? "; Ultra Weave spiral flow pulse: rising 115%, falling 75%"
+              : "; Cylinder body flow thinning: 87%"
+          );
+        }
+      }
+    }
 
     lines.push(`; path ${pathIndex + 1} / ${solidPaths.length} (${path.family})`);
     if (hasPrintedPath && shouldRetract) {
@@ -1375,13 +1923,18 @@ function generateSolidGcode(params) {
     }
     if (currentPosition) {
       const transitionDistance = getPointDistance(currentPosition, { x: start.x, y: start.y, z: startZ });
-      if (isContinuousCylinder) {
-        const transitionExtrusion = extrusionForDistance(transitionDistance, params);
+      if (isContinuousCylinder && transitionDistance > 0.0001) {
+        const transitionExtrusion = getPositiveExtrusion(
+          extrusionForDistance(transitionDistance, params) *
+            layerExtrusionScale *
+            getCylinderBodyFlowScale(startPoint, params)
+        );
         totalExtrusion += transitionExtrusion;
         totalPrintDistance += transitionDistance;
+        totalPrintMinutes += transitionDistance / layerPrintSpeed;
         totalMoves += 1;
         lines.push(
-          `G1 X${fixed(start.x)} Y${fixed(start.y)} Z${fixed(startZ)} E${fixed(transitionExtrusion, 5)} F${fixed(params.printSpeed, 0)}`
+          `G1 X${fixed(start.x)} Y${fixed(start.y)} Z${fixed(startZ)} E${fixed(Math.abs(transitionExtrusion), 5)} F${fixed(layerPrintSpeed, 0)}`
         );
       } else {
         totalTravelDistance += transitionDistance;
@@ -1400,15 +1953,24 @@ function generateSolidGcode(params) {
       const prev = pointToMachine(prevLocal, params);
       const next = pointToMachine(nextLocal, params);
       const nextZ = nextLocal.z || params.layerHeight;
-      const nextLayer = Math.min(solidLayerCount - 1, getSolidLayerIndex(nextZ, params));
+      const nextLayer = Number.isFinite(nextLocal.layerIndex)
+        ? Math.min(solidLayerCount - 1, nextLocal.layerIndex)
+        : Math.min(solidLayerCount - 1, getSolidLayerIndex(nextZ, params));
 
-      while (!isContinuousCylinder && nextLayer > announcedLayer) {
+      while (nextLayer > announcedLayer) {
         announcedLayer += 1;
         lines.push(`;LAYER:${announcedLayer}`);
         lines.push("G92 E0");
         lines.push(`;Z:${fixed(Math.min(nextZ, getSolidTargetHeight(params)), 3)}`);
         if (announcedLayer === 1) {
           lines.push(`M106 S${getSafeFanSpeed(params)} ; enable cooling fan from layer 1`);
+          if (isContinuousCylinder) {
+            lines.push(
+              isUltraWeavePreset(params)
+                ? "; Ultra Weave spiral flow pulse: rising 115%, falling 75%"
+                : "; Cylinder body flow thinning: 87%"
+            );
+          }
         }
       }
 
@@ -1417,12 +1979,18 @@ function generateSolidGcode(params) {
         { x: next.x, y: next.y, z: nextZ }
       );
       const moveTuning = getCylinderLoopMoveTuning(prevLocal, nextLocal, params);
-      const extrusion = extrusionForDistance(distance, params) * moveTuning.extrusionScale;
+      const isFirstLayerMove = isContinuousCylinder && nextLayer === 0;
+      const moveLayerExtrusionScale = isFirstLayerMove ? 1.35 : 1;
+      const extrusion = getPositiveExtrusion(
+        extrusionForDistance(distance, params) * moveTuning.extrusionScale * moveLayerExtrusionScale
+      );
+      const printSpeed = isFirstLayerMove ? 900 : moveTuning.speed;
       totalExtrusion += extrusion;
       totalPrintDistance += distance;
+      totalPrintMinutes += distance / printSpeed;
       totalMoves += 1;
       lines.push(
-        `G1 X${fixed(next.x)} Y${fixed(next.y)} Z${fixed(nextZ)} E${fixed(extrusion, 5)} F${fixed(moveTuning.speed, 0)}`
+        `G1 X${fixed(next.x)} Y${fixed(next.y)} Z${fixed(nextZ)} E${fixed(Math.abs(extrusion), 5)} F${fixed(printSpeed, 0)}`
       );
     }
 
@@ -1437,7 +2005,7 @@ function generateSolidGcode(params) {
   const retractionDriveTime =
     shouldRetract && params.retractionSpeed > 0 ? (params.retractionLength / params.retractionSpeed) * 2 : 0;
   const estimatedMinutes =
-    totalPrintDistance / params.printSpeed +
+    totalPrintMinutes +
     totalTravelDistance / params.travelSpeed +
     retractionCount * retractionDriveTime;
   const estimatedTime = formatEstimatedTime(estimatedMinutes);
@@ -1462,6 +2030,11 @@ function generateSolidGcode(params) {
 }
 
 function generateGcode(params) {
+  if (params.formFactor === "cylinder" || params.formFactor === "cube") {
+    const referenceResult = getReferenceA104Result(params.formFactor);
+    if (referenceResult) return referenceResult;
+  }
+
   if (isSolidFormFactor(params)) {
     return generateSolidGcode(params);
   }
@@ -1481,6 +2054,7 @@ function generateGcode(params) {
   let totalExtrusion = 0;
   let totalMoves = 0;
   let totalPrintDistance = 0;
+  let totalPrintMinutes = 0;
   let totalTravelDistance = 0;
   let retractionCount = 0;
   let currentPosition = null;
@@ -1488,17 +2062,22 @@ function generateGcode(params) {
   const shouldRetract = params.retractionLength > 0;
 
   for (let layer = 0; layer < params.layers; layer += 1) {
+    const isFirstLayer = layer === 0;
+    const layerExtrusionScale = isFirstLayer ? 1.35 : 1;
+    const layerPrintSpeed = isFirstLayer ? 900 : params.printSpeed;
     const z = params.layerHeight * (layer + 1);
     let currentZ = z;
     let paths = generateModePaths(params, layer);
     if (params.workspaceMode === "geometry" && layer === 0 && params.skirtCount > 0) {
       paths = [...generateSkirtPaths(params), ...paths];
     }
+    paths = preparePathsWithIntersectionFade(paths, params);
     lines.push(`;LAYER:${layer}`);
     lines.push("G92 E0");
     lines.push(`;Z:${fixed(z, 3)}`);
     lines.push(`G1 Z${fixed(z)} F600`);
     if (layer === 0) {
+      lines.push("; First layer welding: 135% extrusion at F900");
       lines.push("M106 S0 ; turn off fan for layer 0 root adhesion");
     } else if (layer === 1) {
       lines.push(`M106 S${getSafeFanSpeed(params)} ; enable cooling fan from layer 1`);
@@ -1528,22 +2107,27 @@ function generateGcode(params) {
       }
 
       for (let i = 1; i < path.points.length; i += 1) {
-        const prev = pointToMachine(path.points[i - 1], params);
-        const next = pointToMachine(path.points[i], params);
+        const prevLocal = path.points[i - 1];
         const nextLocal = path.points[i];
+        const prev = pointToMachine(prevLocal, params);
+        const next = pointToMachine(nextLocal, params);
         const distance = Math.hypot(next.x - prev.x, next.y - prev.y);
-        const extrusion = extrusionForDistance(distance, params);
+        const intersectionScale = prevLocal.intersectionFade || nextLocal.intersectionFade ? 0.8 : 1;
+        const extrusion = getPositiveExtrusion(
+          extrusionForDistance(distance, params) * layerExtrusionScale * intersectionScale
+        );
         const nextZ = usePathZMod ? getZModulatedHeight(z, nextLocal, params) : z;
         totalExtrusion += extrusion;
         totalPrintDistance += distance;
+        totalPrintMinutes += distance / layerPrintSpeed;
         totalMoves += 1;
         if (usePathZMod) {
           lines.push(
-            `G1 X${fixed(next.x)} Y${fixed(next.y)} Z${fixed(nextZ)} E${fixed(extrusion, 5)} F${fixed(params.printSpeed, 0)}`
+            `G1 X${fixed(next.x)} Y${fixed(next.y)} Z${fixed(nextZ)} E${fixed(Math.abs(extrusion), 5)} F${fixed(layerPrintSpeed, 0)}`
           );
         } else {
           lines.push(
-            `G1 X${fixed(next.x)} Y${fixed(next.y)} E${fixed(extrusion, 5)} F${fixed(params.printSpeed, 0)}`
+            `G1 X${fixed(next.x)} Y${fixed(next.y)} E${fixed(Math.abs(extrusion), 5)} F${fixed(layerPrintSpeed, 0)}`
           );
         }
         currentZ = nextZ;
@@ -1558,7 +2142,7 @@ function generateGcode(params) {
   const retractionDriveTime =
     shouldRetract && params.retractionSpeed > 0 ? (params.retractionLength / params.retractionSpeed) * 2 : 0;
   const estimatedMinutes =
-    totalPrintDistance / params.printSpeed +
+    totalPrintMinutes +
     totalTravelDistance / params.travelSpeed +
     retractionCount * retractionDriveTime;
   const estimatedTime = formatEstimatedTime(estimatedMinutes);
@@ -1680,9 +2264,20 @@ function applyFilamentPreset(presetName) {
   if (!preset) return;
 
   filamentPresetParams.forEach((name) => {
+    if (!Object.prototype.hasOwnProperty.call(preset, name)) return;
     state[name] = preset[name];
     syncParamInputs(name, preset[name]);
   });
+
+  state.filamentPreset = presetName;
+  filamentPreset.value = presetName;
+  if (Object.prototype.hasOwnProperty.call(preset, "layerHeight")) {
+    syncHeightParams("layerHeight");
+  }
+  if (Object.prototype.hasOwnProperty.call(preset, "useZMod")) {
+    useZModInput.checked = state.useZMod;
+    zModSliders.classList.toggle("hidden", !state.useZMod);
+  }
 
   render();
 }

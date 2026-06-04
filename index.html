@@ -130,6 +130,16 @@
               <input data-param="solidWeaveFrequency" type="range" min="3" max="24" step="1" value="8" />
               <input data-param="solidWeaveFrequency" type="number" min="3" max="24" step="1" value="8" />
             </label>
+            <label class="range-field compact">
+              <span>직조 간격</span>
+              <input data-param="spacing" type="range" min="1" max="20" step="0.1" value="4.2" />
+              <input data-param="spacing" type="number" min="1" max="20" step="0.1" value="4.2" />
+            </label>
+            <label class="range-field compact">
+              <span>Z 직조 진폭</span>
+              <input data-param="weaveAmplitude" type="range" min="0.5" max="1.4" step="0.05" value="1.4" />
+              <input data-param="weaveAmplitude" type="number" min="0.5" max="1.4" step="0.05" value="1.4" />
+            </label>
           </div>
           <div class="form-factor-panel cube-solid-controls">
             <label class="range-field compact">
@@ -164,7 +174,7 @@
             </label>
             <label class="field">
               <span>총 출력 높이 (mm)</span>
-              <input id="totalHeight" data-param="totalHeight" type="number" min="0.05" max="40" step="0.01" value="1.12" />
+              <input id="totalHeight" data-param="totalHeight" type="number" min="0.05" max="40" step="0.01" value="1.28" />
             </label>
           </div>
           <label class="field filament-preset-field">
@@ -177,6 +187,7 @@
               <option value="tpu">TPU</option>
               <option value="silkPla">Silk PLA</option>
               <option value="carbonPla">Carbon PLA</option>
+              <option value="ultraWeave0.4">Ultra Weave 0.4</option>
             </select>
           </label>
         </section>
@@ -213,8 +224,8 @@
             <div id="zModSliders" class="zmod-sliders hidden">
               <label class="range-field compact">
                 <span>Z 진폭</span>
-                <input id="zModAmplitude" type="range" data-param="zModAmplitude" min="0.05" max="0.6" step="0.01" value="0.15" />
-                <input type="number" data-param="zModAmplitude" min="0.05" max="0.6" step="0.01" value="0.15" />
+                <input id="zModAmplitude" type="range" data-param="zModAmplitude" min="0.05" max="1.4" step="0.01" value="0.8" />
+                <input type="number" data-param="zModAmplitude" min="0.05" max="1.4" step="0.01" value="0.8" />
               </label>
               <label class="range-field compact">
                 <span>Z 주파수</span>
@@ -230,8 +241,8 @@
           </label>
           <label class="range-field">
             <span>선 간격</span>
-            <input data-param="spacing" type="range" min="1" max="20" step="0.1" value="7.5" />
-            <input data-param="spacing" type="number" min="1" max="20" step="0.1" value="7.5" />
+            <input data-param="spacing" type="range" min="1" max="20" step="0.1" value="4.2" />
+            <input data-param="spacing" type="number" min="1" max="20" step="0.1" value="4.2" />
           </label>
           <label class="range-field cross-angle-control">
             <span>교차 각도</span>
@@ -257,13 +268,13 @@
           </label>
           <label class="range-field">
             <span>노즐 속도</span>
-            <input data-param="printSpeed" type="range" min="300" max="6000" step="50" value="1800" />
-            <input data-param="printSpeed" type="number" min="300" max="6000" step="50" value="1800" />
+            <input data-param="printSpeed" type="range" min="300" max="6000" step="50" value="900" />
+            <input data-param="printSpeed" type="number" min="300" max="6000" step="50" value="900" />
           </label>
           <label class="range-field">
             <span>압출 배율</span>
-            <input data-param="extrusionMultiplier" type="range" min="0.2" max="2" step="0.01" value="0.92" />
-            <input data-param="extrusionMultiplier" type="number" min="0.2" max="2" step="0.01" value="0.92" />
+            <input data-param="extrusionMultiplier" type="range" min="0.2" max="2" step="0.01" value="1.15" />
+            <input data-param="extrusionMultiplier" type="number" min="0.2" max="2" step="0.01" value="1.15" />
           </label>
           <label class="range-field">
             <span>리트랙션</span>
@@ -289,7 +300,7 @@
           <div class="two-col solid-motion-extra">
             <label class="field">
               <span>레이어 높이</span>
-              <input data-param="layerHeight" type="number" min="0.05" max="1" step="0.01" value="0.28" />
+              <input data-param="layerHeight" type="number" min="0.05" max="1" step="0.01" value="0.32" />
             </label>
             <label class="field">
               <span>레이어 수</span>
@@ -348,11 +359,11 @@
           <div class="two-col">
             <label class="field">
               <span>베드 온도</span>
-              <input data-param="bedTemp" type="number" min="0" max="120" step="1" value="60" />
+              <input data-param="bedTemp" type="number" min="0" max="120" step="1" value="65" />
             </label>
             <label class="field">
               <span>노즐 온도</span>
-              <input data-param="nozzleTemp" type="number" min="0" max="320" step="1" value="210" />
+              <input data-param="nozzleTemp" type="number" min="0" max="320" step="1" value="235" />
             </label>
             <label class="field">
               <span>원점 X</span>
@@ -400,11 +411,11 @@
             </label>
             <label class="field">
               <span>총 출력 높이 (mm)</span>
-              <input data-param="totalHeight" type="number" min="0.05" max="40" step="0.01" value="1.12" />
+              <input data-param="totalHeight" type="number" min="0.05" max="40" step="0.01" value="1.28" />
             </label>
             <label class="field">
               <span>레이어 높이</span>
-              <input data-param="layerHeight" type="number" min="0.05" max="1" step="0.01" value="0.28" />
+              <input data-param="layerHeight" type="number" min="0.05" max="1" step="0.01" value="0.32" />
             </label>
           </div>
         </section>
@@ -425,6 +436,8 @@
       </section>
     </main>
 
+    <script src="reference-cylinder-a1-0.4.js"></script>
+    <script src="reference-cube-a1-0.4.js"></script>
     <script src="script.js"></script>
   </body>
 </html>

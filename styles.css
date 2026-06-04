@@ -674,7 +674,6 @@ body[data-workspace-mode="geometry"][data-form-factor="cube"] #geometryControlsP
 body[data-workspace-mode="geometry"][data-form-factor="cylinder"] #geometryControlsPanel .pattern-mode-header,
 body[data-workspace-mode="geometry"][data-form-factor="cylinder"] #geometryControlsPanel .pattern-mode-segmented,
 body[data-workspace-mode="geometry"][data-form-factor="cylinder"] #geometryControlsPanel .structure-density-controls,
-body[data-workspace-mode="geometry"][data-form-factor="cylinder"] #geometryControlsPanel .filament-preset-field,
 body[data-workspace-mode="geometry"][data-form-factor="cube"] #geometryControlsPanel .pattern-mode-header,
 body[data-workspace-mode="geometry"][data-form-factor="cube"] #geometryControlsPanel .pattern-mode-segmented,
 body[data-workspace-mode="geometry"][data-form-factor="cube"] #geometryControlsPanel .structure-density-controls,
