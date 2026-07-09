@@ -664,39 +664,31 @@ body[data-workspace-mode="geometry"][data-form-factor="cube"] #geometryControlsP
   background: #fbfbfb;
 }
 
-body[data-workspace-mode="geometry"][data-form-factor="cylinder"] #geometryControlsPanel .zmod-setting,
-body[data-workspace-mode="geometry"][data-form-factor="cylinder"] #geometryControlsPanel .zmod-sliders,
-body[data-workspace-mode="geometry"][data-form-factor="cube"] #geometryControlsPanel .zmod-setting,
-body[data-workspace-mode="geometry"][data-form-factor="cube"] #geometryControlsPanel .zmod-sliders {
-  display: none !important;
-}
-
 body[data-workspace-mode="geometry"][data-form-factor="cylinder"] #geometryControlsPanel .pattern-mode-header,
 body[data-workspace-mode="geometry"][data-form-factor="cylinder"] #geometryControlsPanel .pattern-mode-segmented,
 body[data-workspace-mode="geometry"][data-form-factor="cylinder"] #geometryControlsPanel .structure-density-controls,
+body[data-workspace-mode="geometry"][data-form-factor="cylinder"] #geometryControlsPanel .filament-preset-field,
 body[data-workspace-mode="geometry"][data-form-factor="cube"] #geometryControlsPanel .pattern-mode-header,
 body[data-workspace-mode="geometry"][data-form-factor="cube"] #geometryControlsPanel .pattern-mode-segmented,
 body[data-workspace-mode="geometry"][data-form-factor="cube"] #geometryControlsPanel .structure-density-controls,
-body[data-workspace-mode="geometry"][data-form-factor="cube"] #geometryControlsPanel .filament-preset-field {
+body[data-workspace-mode="geometry"][data-form-factor="cube"] #geometryControlsPanel .filament-preset-field,
+body[data-workspace-mode="geometry"][data-form-factor="cylinder"] #geometryControlsPanel .settings-tabs,
+body[data-workspace-mode="geometry"][data-form-factor="cube"] #geometryControlsPanel .settings-tabs {
+  display: none !important;
+}
+
+body[data-workspace-mode="geometry"][data-form-factor="cylinder"] #geometryControlsPanel .print-motion-controls .solid-motion-extra,
+body[data-workspace-mode="geometry"][data-form-factor="cube"] #geometryControlsPanel .print-motion-controls .solid-motion-extra,
+body[data-workspace-mode="geometry"][data-form-factor="cylinder"] #geometryControlsPanel .macro-preset-field,
+body[data-workspace-mode="geometry"][data-form-factor="cube"] #geometryControlsPanel .macro-preset-field {
   display: none !important;
 }
 
 body[data-workspace-mode="geometry"][data-form-factor="cylinder"] #geometryControlsPanel .print-motion-controls.hidden,
-body[data-workspace-mode="geometry"][data-form-factor="cube"] #geometryControlsPanel .print-motion-controls.hidden {
+body[data-workspace-mode="geometry"][data-form-factor="cylinder"] #geometryControlsPanel .safety-code-controls.hidden,
+body[data-workspace-mode="geometry"][data-form-factor="cube"] #geometryControlsPanel .print-motion-controls.hidden,
+body[data-workspace-mode="geometry"][data-form-factor="cube"] #geometryControlsPanel .safety-code-controls.hidden {
   display: block !important;
-}
-
-body[data-workspace-mode="geometry"][data-form-factor="cylinder"] #geometryControlsPanel .print-motion-controls .solid-motion-extra,
-body[data-workspace-mode="geometry"][data-form-factor="cube"] #geometryControlsPanel .print-motion-controls .solid-motion-extra {
-  display: none !important;
-}
-
-#geometryControlsPanel .cylinder-knit-options {
-  display: none;
-}
-
-body[data-workspace-mode="geometry"][data-form-factor="cylinder"] #geometryControlsPanel .cylinder-knit-options:not(.hidden) {
-  display: block;
 }
 
 .field,

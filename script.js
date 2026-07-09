@@ -37,6 +37,14 @@ const state = {
   solidHeight: 100,
   solidWidth: 80,
   solidDepth: 80,
+  cylinderStraightMode: false,
+  cubeStraightMode: false,
+  profileExtensionEnabled: false,
+  profileExtensionHeight: 30,
+  profileTaperEnabled: false,
+  profileTaperHeight: 35,
+  profileTaperScale: 0.62,
+  solidWeavePitchScale: 0.5,
   solidWeaveFrequency: 8,
   cylinderBaseEnabled: true,
   cylinderBaseLayers: 3,
@@ -49,7 +57,7 @@ const state = {
   gradientStrength: 1.0,
   useZMod: false,
   zModAmplitude: 0.8,
-  zModFrequency: 0.5,
+  zModFrequency: 24,
   imageStrength: 1.0,
   travelSpeed: 7200,
   printSpeed: 900,
@@ -93,7 +101,7 @@ const ultraWeave04Process = {
 const filamentPresets = {
   pla: {
     ...ultraWeave04Process,
-    nozzleTemp: 230,
+    nozzleTemp: 235,
     bedTemp: 65,
     printSpeed: 900,
     extrusionMultiplier: 1.15,
@@ -181,6 +189,16 @@ const referenceCubeA104Gcode =
     : "";
 let referenceCylinderA104Cache = null;
 let referenceCubeA104Cache = null;
+let scaledReferenceCylinderA104Cache = null;
+let scaledReferenceCylinderA104CacheKey = "";
+let scaledReferenceCubeA104Cache = null;
+let scaledReferenceCubeA104CacheKey = "";
+
+const REFERENCE_CYLINDER_CENTER_X = 128;
+const REFERENCE_CYLINDER_CENTER_Y = 128;
+const REFERENCE_CYLINDER_FIRST_LAYER_Z = 0.4;
+const REFERENCE_A104_BASE_EXTRUSION_MULTIPLIER = 1.15;
+const SOLID_MAX_MODEL_HEIGHT = 240;
 
 function parseReferenceA104Data(gcode, family) {
   if (!gcode) return null;
@@ -189,6 +207,7 @@ function parseReferenceA104Data(gcode, family) {
   let feed = 0;
   let position = { x: 128, y: 128, z: 0 };
   let totalExtrusion = 0;
+  let totalMoves = 0;
   let totalPrintDistance = 0;
   let totalPrintMinutes = 0;
   let minX = Infinity;
@@ -196,8 +215,9 @@ function parseReferenceA104Data(gcode, family) {
   let minY = Infinity;
   let maxY = -Infinity;
   let maxZ = 0;
+  let pendingPreviewBreak = false;
 
-  const createPreviewPoint = (machinePoint, strokeType, extrusion = 0) => ({
+  const createPreviewPoint = (machinePoint, strokeType, extrusion = 0, breakBefore = false) => ({
     x: machinePoint.x - 128,
     y: machinePoint.y - 128,
     z: machinePoint.z,
@@ -206,6 +226,7 @@ function parseReferenceA104Data(gcode, family) {
     strokeType,
     extrusion,
     feed,
+    breakBefore,
   });
 
   gcode.split(/\r?\n/).forEach((line) => {
@@ -232,23 +253,31 @@ function parseReferenceA104Data(gcode, family) {
       z: Number.isFinite(words.z) ? words.z : position.z,
     };
     const extrusion = Number.isFinite(words.e) ? words.e : 0;
+    const moveDistance = getPointDistance(position, next);
 
     if (extrusion > 0) {
-      const distance = getPointDistance(position, next);
       const planarDistance = Math.hypot(next.x - position.x, next.y - position.y);
       const zDelta = next.z - position.z;
       const strokeType = planarDistance < 0.05 && zDelta > 0 ? "up" : zDelta < 0 ? "down" : "reference";
 
-      if (!points.length) points.push(createPreviewPoint(position, strokeType));
+      if (pendingPreviewBreak && points.length) {
+        points.push(createPreviewPoint(position, strokeType, 0, true));
+        pendingPreviewBreak = false;
+      } else if (!points.length) {
+        points.push(createPreviewPoint(position, strokeType));
+      }
       points.push(createPreviewPoint(next, strokeType, extrusion));
       totalExtrusion += extrusion;
-      totalPrintDistance += distance;
-      if (feed > 0) totalPrintMinutes += distance / feed;
+      totalMoves += 1;
+      totalPrintDistance += moveDistance;
+      if (feed > 0) totalPrintMinutes += moveDistance / feed;
       minX = Math.min(minX, next.x);
       maxX = Math.max(maxX, next.x);
       minY = Math.min(minY, next.y);
       maxY = Math.max(maxY, next.y);
       maxZ = Math.max(maxZ, next.z);
+    } else if (moveDistance > 0.0001 && points.length) {
+      pendingPreviewBreak = true;
     }
 
     position = next;
@@ -269,11 +298,23 @@ function parseReferenceA104Data(gcode, family) {
     depth,
     height: maxZ,
     totalExtrusion,
-    totalMoves: Math.max(0, points.length - 1),
+    totalMoves,
     totalPrintDistance,
     estimatedWeight,
     estimatedTime: formatEstimatedTime(totalPrintMinutes),
   };
+}
+
+function getCubeTargetWidth(params = state) {
+  const radius = Number(params.solidRadius);
+  if (Number.isFinite(radius) && radius > 0) return Math.max(1, radius * 2);
+  return Math.max(1, Number(params.solidWidth) || state.solidWidth);
+}
+
+function getCubeTargetDepth(params = state) {
+  const radius = Number(params.solidRadius);
+  if (Number.isFinite(radius) && radius > 0) return Math.max(1, radius * 2);
+  return Math.max(1, Number(params.solidDepth) || state.solidDepth);
 }
 
 function getReferenceCylinderA104Data() {
@@ -288,20 +329,613 @@ function getReferenceCubeA104Data() {
   return referenceCubeA104Cache;
 }
 
-function getReferenceA104DataForFormFactor(formFactor) {
-  if (formFactor === "cylinder") return getReferenceCylinderA104Data();
-  if (formFactor === "cube") return getReferenceCubeA104Data();
+function scaleReferenceCylinderZ(z, targetHeight, referenceHeight) {
+  if (z <= REFERENCE_CYLINDER_FIRST_LAYER_Z) return z;
+  const sourceRange = Math.max(0.001, referenceHeight - REFERENCE_CYLINDER_FIRST_LAYER_Z);
+  const targetRange = Math.max(0.001, targetHeight - REFERENCE_CYLINDER_FIRST_LAYER_Z);
+  return REFERENCE_CYLINDER_FIRST_LAYER_Z + (z - REFERENCE_CYLINDER_FIRST_LAYER_Z) * (targetRange / sourceRange);
+}
+
+function getProfileBaseHeight(params = state) {
+  const layerHeight = Math.max(0.05, Number(params.layerHeight) || state.layerHeight);
+  return Math.max(layerHeight, Number(params.solidHeight) || state.solidHeight);
+}
+
+function getProfileExtensionMaxHeight(params = state) {
+  return Math.max(0, SOLID_MAX_MODEL_HEIGHT - getProfileBaseHeight(params));
+}
+
+function getProfileExtensionHeight(params = state) {
+  if (params.profileIsBaked || params.profileExtensionEnabled !== true) return 0;
+  return clamp(Number(params.profileExtensionHeight) || 0, 0, getProfileExtensionMaxHeight(params));
+}
+
+function getProfileTargetHeight(params = state) {
+  return getProfileBaseHeight(params) + getProfileExtensionHeight(params);
+}
+
+function getProfileTaperHeight(params = state) {
+  if (params.profileTaperEnabled !== true) return 0;
+  const targetHeight = getProfileTargetHeight(params);
+  const availableHeight = Math.max(0, targetHeight - REFERENCE_CYLINDER_FIRST_LAYER_Z);
+  return clamp(Number(params.profileTaperHeight) || 0, 0, availableHeight);
+}
+
+function getProfileTaperScale(params = state) {
+  return clamp(Number(params.profileTaperScale) || 0.62, 0.25, 1);
+}
+
+function smoothProfileStep(value) {
+  const t = clamp(value, 0, 1);
+  return t * t * (3 - 2 * t);
+}
+
+function getProfileScaleAtZ(z, params = state) {
+  const taperHeight = getProfileTaperHeight(params);
+  if (taperHeight <= 0) return 1;
+
+  const targetHeight = getProfileTargetHeight(params);
+  const taperStart = targetHeight - taperHeight;
+  const taperProgress = smoothProfileStep((z - taperStart) / Math.max(0.001, taperHeight));
+  return 1 - (1 - getProfileTaperScale(params)) * taperProgress;
+}
+
+function getProfileCacheKey(params = state) {
+  return [
+    params.profileExtensionEnabled === true ? "extend" : "base",
+    fixed(params.profileExtensionEnabled === true ? getProfileExtensionHeight(params) : 0, 3),
+    params.profileTaperEnabled === true ? "taper" : "open",
+    fixed(params.profileTaperEnabled === true ? getProfileTaperHeight(params) : 0, 3),
+    fixed(params.profileTaperEnabled === true ? getProfileTaperScale(params) : 1, 3),
+    fixed(getSolidWeavePitchScale(params), 3),
+  ].join(":");
+}
+
+function getProfileReferenceHeight(params = state) {
+  return Math.max(REFERENCE_CYLINDER_FIRST_LAYER_Z, getProfileBaseHeight(params));
+}
+
+function getSolidWeavePitchScale(params = state) {
+  return clamp(Number(params.solidWeavePitchScale) || 0.5, 0.5, 1);
+}
+
+function getCopiedTopExtensionPoints(sourcePoints, params, centerX, centerY) {
+  const extensionHeight = getProfileExtensionHeight(params);
+  if (extensionHeight <= 0 || !sourcePoints || sourcePoints.length < 2) return [];
+
+  const baseHeight = getProfileReferenceHeight(params);
+  const targetHeight = getProfileTargetHeight(params);
+  const seedHeight = clamp(Math.min(extensionHeight, baseHeight * 0.1), 6, 14);
+  const straightSeedTop = Math.max(REFERENCE_CYLINDER_FIRST_LAYER_Z, baseHeight - Math.max(8, seedHeight * 0.8));
+  const straightSeedHeight = clamp(seedHeight * 1.4, 10, 14);
+  const straightSeedBottom = Math.max(REFERENCE_CYLINDER_FIRST_LAYER_Z, straightSeedTop - straightSeedHeight);
+  const continuityThreshold = Math.max(8, getReferenceNumber(params, "spacing", state.spacing, 0.1, 50) * 2.2);
+  let seed = [];
+
+  sourcePoints.forEach((point) => {
+    if (!Number.isFinite(point?.z) || point.z < straightSeedBottom || point.z > straightSeedTop) return;
+
+    const previousSeedPoint = seed[seed.length - 1];
+    seed.push({
+      ...point,
+      breakBefore:
+        Boolean(point.breakBefore) ||
+        (previousSeedPoint ? getPointDistance(previousSeedPoint, point) > continuityThreshold : false),
+    });
+  });
+
+  let usesStraightSeed = seed.length >= 120;
+
+  if (!usesStraightSeed) {
+    const lastIndex = sourcePoints.length - 1;
+    const lastSourcePoint = sourcePoints[lastIndex];
+    const closureThreshold = Math.max(1.5, (Number(params.nozzleDiameter) || state.nozzleDiameter) * 6);
+    const minSeedPointCount = 120;
+    const preferredSeedSpan = seedHeight * 1.3;
+    let seedStartIndex = -1;
+    let bestClosureScore = Infinity;
+
+    for (let index = lastIndex - minSeedPointCount; index >= 0; index -= 1) {
+      const point = sourcePoints[index];
+      if (!Number.isFinite(point?.z)) continue;
+
+      const span = lastSourcePoint.z - point.z;
+      if (span < 2.5) continue;
+      if (span > seedHeight * 2.4) break;
+
+      const planarDistance = Math.hypot(lastSourcePoint.x - point.x, lastSourcePoint.y - point.y);
+      const preferredSpanScore = Math.abs(span - preferredSeedSpan);
+      const score = preferredSpanScore + planarDistance * 0.35;
+
+      if (planarDistance <= closureThreshold && score < bestClosureScore) {
+        seedStartIndex = index;
+        bestClosureScore = score;
+      }
+    }
+
+    if (seedStartIndex >= 0) {
+      seed = sourcePoints.slice(seedStartIndex, lastIndex + 1);
+    } else {
+      seed = [];
+      for (let index = sourcePoints.length - 1; index >= 0; index -= 1) {
+        const point = sourcePoints[index];
+        if (!Number.isFinite(point?.z)) continue;
+        seed.unshift(point);
+        if (baseHeight - point.z >= seedHeight) break;
+      }
+    }
+  }
+
+  if (seed.length < 2) return [];
+
+  const seedMinZ = Math.min(...seed.map((point) => point.z));
+  const seedMaxZ = Math.max(...seed.map((point) => point.z));
+  const seedSpan = Math.max(0.2, seedMaxZ - seedMinZ);
+  const weavePitchScale = getSolidWeavePitchScale(params);
+  const repeatStep = Math.max(0.2, seedSpan * weavePitchScale);
+  const initialOffset = baseHeight - seedMinZ - seedSpan * (1 - weavePitchScale);
+  const columnCount = Math.max(4, Math.round(Number(params.zModFrequency) || state.zModFrequency || 24));
+  const halfColumnAngle = Math.PI / columnCount;
+  const points = [];
+  let repeatIndex = 0;
+
+  for (
+    let offset = initialOffset;
+    seedMinZ + offset <= targetHeight + 0.001;
+    offset += repeatStep
+  ) {
+    let repeatPointCount = 0;
+
+    seed.forEach((point) => {
+      const z = point.z + offset;
+      if (z < baseHeight - 0.001 || z > targetHeight + 0.001) return;
+
+      const sourceScale = Math.max(0.001, getProfileScaleAtZ(Math.min(point.z, baseHeight), params));
+      const targetScale = getProfileScaleAtZ(z, params);
+      const profileRatio = targetScale / sourceScale;
+      const localX = (point.x - centerX) * profileRatio;
+      const localY = (point.y - centerY) * profileRatio;
+      const phaseAngle =
+        params.formFactor === "cylinder" && weavePitchScale < 0.999 && repeatIndex % 2 === 1
+          ? halfColumnAngle
+          : 0;
+      const cosPhase = Math.cos(phaseAngle);
+      const sinPhase = Math.sin(phaseAngle);
+
+      points.push({
+        x: centerX + localX * cosPhase - localY * sinPhase,
+        y: centerY + localX * sinPhase + localY * cosPhase,
+        z,
+        strokeType: point.strokeType || "reference",
+        breakBefore: Boolean(point.breakBefore) || (usesStraightSeed && points.length > 0 && repeatPointCount === 0),
+        travelBefore: Boolean(point.breakBefore) || (usesStraightSeed && points.length > 0 && repeatPointCount === 0),
+      });
+      repeatPointCount += 1;
+    });
+
+    if (points.length > 200000) break;
+    repeatIndex += 1;
+  }
+
+  return points;
+}
+
+function getExtensionGcodeLines(points, currentPoint, params, label) {
+  if (!points.length) return [];
+
+  const printSpeed = getReferenceNumber(params, "printSpeed", state.printSpeed, 300, 6000);
+  const travelSpeed = getReferenceNumber(params, "travelSpeed", state.travelSpeed, 1800, 12000);
+  const jumpThreshold = Math.max(12, getReferenceNumber(params, "spacing", state.spacing, 0.1, 50) * 2.5);
+  const lines = [`; FEATURE: ${label}`];
+  let previous = currentPoint;
+
+  points.forEach((point, index) => {
+    if (!previous && index === 0) {
+      lines.push(`G0 X${fixed(point.x)} Y${fixed(point.y)} Z${fixed(point.z)} F${fixed(travelSpeed, 0)}`);
+      previous = point;
+      return;
+    }
+
+    const distance = previous ? getPointDistance(previous, point) : 0;
+    if (distance <= 0.0001) {
+      previous = point;
+      return;
+    }
+
+    const planarDistance = previous ? Math.hypot(point.x - previous.x, point.y - previous.y) : 0;
+    if (point.travelBefore || point.breakBefore || planarDistance > jumpThreshold) {
+      lines.push(`G0 X${fixed(point.x)} Y${fixed(point.y)} Z${fixed(point.z)} F${fixed(travelSpeed, 0)}`);
+      previous = point;
+      return;
+    }
+
+    const extrusion = Math.abs(extrusionForDistance(distance, params));
+    lines.push(
+      `G1 X${fixed(point.x)} Y${fixed(point.y)} Z${fixed(point.z)} E${fixed(extrusion, 8)} F${fixed(printSpeed, 0)}`
+    );
+    previous = point;
+  });
+
+  return lines;
+}
+
+function getReferenceNumber(params, name, fallback, min = -Infinity, max = Infinity) {
+  const value = Number(params[name]);
+  return clamp(Number.isFinite(value) ? value : fallback, min, max);
+}
+
+function setGcodeWord(line, word, value, digits = 0) {
+  const formatted = `${word}${fixed(value, digits)}`;
+  const pattern = new RegExp(`\\b${word}-?\\d+(?:\\.\\d+)?`);
+  return pattern.test(line) ? line.replace(pattern, formatted) : `${line} ${formatted}`;
+}
+
+function rewriteReferenceSafetyLine(line, params, context) {
+  let output = line;
+  const bedTemp = getReferenceNumber(params, "bedTemp", state.bedTemp, 0, 120);
+  const nozzleTemp = getReferenceNumber(params, "nozzleTemp", state.nozzleTemp, 0, 320);
+  const retractionLength = getReferenceNumber(params, "retractionLength", state.retractionLength, 0, 8);
+  const retractionSpeed = getReferenceNumber(params, "retractionSpeed", state.retractionSpeed, 300, 6000);
+
+  if (/\bM140 S(?!0\b)-?\d+(?:\.\d+)?/.test(output)) {
+    output = output.replace(/\bM140 S(?!0\b)-?\d+(?:\.\d+)?/g, `M140 S${fixed(bedTemp, 0)}`);
+  }
+  if (/\bM190 S(?!0\b)-?\d+(?:\.\d+)?/.test(output)) {
+    output = output.replace(/\bM190 S(?!0\b)-?\d+(?:\.\d+)?/g, `M190 S${fixed(bedTemp, 0)}`);
+    context.seenBedWait = true;
+  }
+  if (context.seenBedWait && /\bM10[49] S(?!0\b)-?\d+(?:\.\d+)?/.test(output)) {
+    output = output.replace(/\bM104 S(?!0\b)-?\d+(?:\.\d+)?/g, `M104 S${fixed(nozzleTemp, 0)}`);
+    output = output.replace(/\bM109 S(?!0\b)-?\d+(?:\.\d+)?/g, `M109 S${fixed(nozzleTemp, 0)}`);
+  }
+  if (context.inEndSequence && /^G1 E-\d+(?:\.\d+)? F\d+/.test(output.trim())) {
+    const prefix = line.match(/^\s*/)?.[0] || "";
+    output = `${prefix}G1 E-${fixed(retractionLength, 4)} F${fixed(retractionSpeed, 0)}`;
+  }
+
+  return output;
+}
+
+function rewriteReferenceMotionLine(line, params, currentZ, distanceScale = 1) {
+  const printSpeed = getReferenceNumber(params, "printSpeed", state.printSpeed, 300, 6000);
+  const travelSpeed = getReferenceNumber(params, "travelSpeed", state.travelSpeed, 1800, 12000);
+  const extrusionMultiplier = getReferenceNumber(params, "extrusionMultiplier", state.extrusionMultiplier, 0, 2);
+  const extrusionScale = distanceScale * (extrusionMultiplier / REFERENCE_A104_BASE_EXTRUSION_MULTIPLIER);
+  const hasExtrusion = /\bE-?\d+(?:\.\d+)?/.test(line);
+  const hasPositiveExtrusion = /\bE(?!-)\d+(?:\.\d+)?/.test(line);
+  let output = line;
+
+  if (hasPositiveExtrusion) {
+    output = output.replace(/\bE(-?\d+(?:\.\d+)?)/, (match, value) => {
+      const extrusion = Number(value);
+      return extrusion > 0 ? `E${fixed(Math.abs(extrusion * extrusionScale), 8)}` : match;
+    });
+    output = setGcodeWord(output, "F", currentZ <= REFERENCE_CYLINDER_FIRST_LAYER_Z + 0.001 ? 900 : printSpeed, 0);
+    return output;
+  }
+
+  if (/^G0\s/.test(output) && /\b[XYZ]-?\d+(?:\.\d+)?/.test(output) && !hasExtrusion) {
+    return setGcodeWord(output, "F", travelSpeed, 0);
+  }
+
+  return output;
+}
+
+function transformReferenceCylinderA104Gcode(params, options = {}) {
+  const reference = getReferenceCylinderA104Data();
+  if (!reference || !referenceCylinderA104Gcode) return referenceCylinderA104Gcode;
+
+  const targetRadius = Math.max(1, Number(params.solidRadius) || state.solidRadius);
+  const baseHeight = getProfileReferenceHeight(params);
+  const targetHeight = Math.max(REFERENCE_CYLINDER_FIRST_LAYER_Z, getProfileTargetHeight(params));
+  const radialScale = targetRadius / Math.max(0.001, reference.radius);
+  const useStraightWall = params.cylinderStraightMode === true;
+  const parkZ = Math.min(250, targetHeight + 5);
+  const finalParkZ = Math.min(250, Math.max(parkZ, targetHeight + 100));
+  const destinationCenterX = options.useMachineOrigin
+    ? getReferenceNumber(params, "originX", state.originX, 0, 250)
+    : REFERENCE_CYLINDER_CENTER_X;
+  const destinationCenterY = options.useMachineOrigin
+    ? getReferenceNumber(params, "originY", state.originY, 0, 250)
+    : REFERENCE_CYLINDER_CENTER_Y;
+  let inModel = false;
+  let inEndSequence = false;
+  const safetyContext = { seenBedWait: false };
+  let position = { x: REFERENCE_CYLINDER_CENTER_X, y: REFERENCE_CYLINDER_CENTER_Y, z: 0 };
+  const transformedModelPoints = [];
+
+  const mapPoint = (point) => {
+    const sourceX = point.x - REFERENCE_CYLINDER_CENTER_X;
+    const sourceY = point.y - REFERENCE_CYLINDER_CENTER_Y;
+    const sourceRadius = Math.hypot(sourceX, sourceY);
+    const angle = sourceRadius > 0.0001 ? Math.atan2(sourceY, sourceX) : 0;
+    const mappedZ = scaleReferenceCylinderZ(point.z, baseHeight, reference.height);
+    const mappedRadius = (useStraightWall ? targetRadius : sourceRadius * radialScale) * getProfileScaleAtZ(mappedZ, params);
+
+    return {
+      x: destinationCenterX + Math.cos(angle) * mappedRadius,
+      y: destinationCenterY + Math.sin(angle) * mappedRadius,
+      z: mappedZ,
+    };
+  };
+
+  return referenceCylinderA104Gcode
+    .split(/\r?\n/)
+    .map((line) => {
+      if (line.includes("; ===== begin model =====")) {
+        inModel = true;
+        return line;
+      }
+      if (line.includes("; ===== End sequence =====")) {
+        const mappedPosition = mapPoint(position);
+        const extensionLines = getExtensionGcodeLines(
+          getCopiedTopExtensionPoints(transformedModelPoints, params, destinationCenterX, destinationCenterY),
+          mappedPosition,
+          params,
+          "Copied top cylinder extension"
+        );
+        inModel = false;
+        inEndSequence = true;
+        safetyContext.inEndSequence = true;
+        return extensionLines.length ? `${extensionLines.join("\n")}\n${line}` : line;
+      }
+      if (/^; max_z_height:/.test(line)) {
+        return `; max_z_height: ${fixed(targetHeight, 2)}`;
+      }
+      if (inModel && /^; Z_HEIGHT:/.test(line)) {
+        const match = line.match(/-?\d+(?:\.\d+)?/);
+        return match
+          ? `; Z_HEIGHT: ${fixed(scaleReferenceCylinderZ(Number(match[0]), baseHeight, reference.height), 3)}`
+          : line;
+      }
+      if (inEndSequence && /^G1 Z43\.50 F900/.test(line)) {
+        return `G1 Z${fixed(parkZ, 2)} F900`;
+      }
+      if (inEndSequence && /^G1 Z143\.00 F600/.test(line)) {
+        return `G1 Z${fixed(finalParkZ, 2)} F600`;
+      }
+      if (!inModel) return rewriteReferenceSafetyLine(line, params, safetyContext);
+      if (!/^G[01]\s/.test(line)) return line;
+
+      const words = {};
+      line.replace(/([XYZEF])(-?\d+(?:\.\d+)?)/g, (match, key, value) => {
+        words[key.toLowerCase()] = Number(value);
+        return match;
+      });
+      const next = {
+        x: Number.isFinite(words.x) ? words.x : position.x,
+        y: Number.isFinite(words.y) ? words.y : position.y,
+        z: Number.isFinite(words.z) ? words.z : position.z,
+      };
+      const mappedNext = mapPoint(next);
+      const mappedPosition = mapPoint(position);
+      const sourceDistance = getPointDistance(position, next);
+      const mappedDistance = getPointDistance(mappedPosition, mappedNext);
+      const extrusionScale = sourceDistance > 0.000001 ? mappedDistance / sourceDistance : 1;
+      const hasPositiveExtrusion = Number.isFinite(words.e) && words.e > 0;
+
+      if (hasPositiveExtrusion) {
+        const planarDistance = Math.hypot(mappedNext.x - mappedPosition.x, mappedNext.y - mappedPosition.y);
+        const zDelta = mappedNext.z - mappedPosition.z;
+        const strokeType = planarDistance < 0.05 && zDelta > 0 ? "up" : zDelta < 0 ? "down" : "reference";
+        if (!transformedModelPoints.length) transformedModelPoints.push({ ...mappedPosition, strokeType });
+        transformedModelPoints.push({ ...mappedNext, strokeType });
+      }
+
+      let transformed = line.replace(/([XYZ])(-?\d+(?:\.\d+)?)/g, (match, key) => {
+        if (key === "X") return `X${fixed(mappedNext.x, 3)}`;
+        if (key === "Y") return `Y${fixed(mappedNext.y, 3)}`;
+        if (key === "Z") return `Z${fixed(mappedNext.z, 3)}`;
+        return match;
+      });
+      transformed = rewriteReferenceMotionLine(transformed, params, mappedNext.z, extrusionScale);
+
+      position = next;
+      return transformed;
+    })
+    .join("\n");
+}
+
+function getScaledReferenceCylinderA104Data(params = state) {
+  const targetRadius = Math.max(1, Number(params.solidRadius) || state.solidRadius);
+  const targetHeight = Math.max(REFERENCE_CYLINDER_FIRST_LAYER_Z, getProfileTargetHeight(params));
+  const cacheKey = `${fixed(targetRadius, 3)}:${fixed(targetHeight, 3)}:${params.cylinderStraightMode === true ? "straight" : "woven"}:${getProfileCacheKey(params)}`;
+  if (scaledReferenceCylinderA104Cache && scaledReferenceCylinderA104CacheKey === cacheKey) {
+    return scaledReferenceCylinderA104Cache;
+  }
+
+  const transformedGcode = transformReferenceCylinderA104Gcode(
+    { ...params, solidRadius: targetRadius },
+    { useMachineOrigin: false }
+  );
+  scaledReferenceCylinderA104Cache = parseReferenceA104Data(transformedGcode, "referenceCylinder04");
+  scaledReferenceCylinderA104CacheKey = cacheKey;
+  return scaledReferenceCylinderA104Cache;
+}
+
+function transformReferenceCubeA104Gcode(params) {
+  const reference = getReferenceCubeA104Data();
+  if (!reference || !referenceCubeA104Gcode) return referenceCubeA104Gcode;
+
+  const targetWidth = getCubeTargetWidth(params);
+  const targetDepth = getCubeTargetDepth(params);
+  const baseHeight = getProfileReferenceHeight(params);
+  const targetHeight = Math.max(REFERENCE_CYLINDER_FIRST_LAYER_Z, getProfileTargetHeight(params));
+  const widthScale = targetWidth / Math.max(0.001, reference.width);
+  const depthScale = targetDepth / Math.max(0.001, reference.depth);
+  const halfW = targetWidth / 2;
+  const halfD = targetDepth / 2;
+  const useStraightBox = params.cubeStraightMode === true;
+  const destinationCenterX = getReferenceNumber(params, "originX", state.originX, 0, 250);
+  const destinationCenterY = getReferenceNumber(params, "originY", state.originY, 0, 250);
+  let inModel = false;
+  let inEndSequence = false;
+  const safetyContext = { seenBedWait: false };
+  let position = { x: REFERENCE_CYLINDER_CENTER_X, y: REFERENCE_CYLINDER_CENTER_Y, z: 0 };
+  const transformedModelPoints = [];
+
+  const mapPoint = (point) => {
+    const sourceX = point.x - REFERENCE_CYLINDER_CENTER_X;
+    const sourceY = point.y - REFERENCE_CYLINDER_CENTER_Y;
+    let mappedX = sourceX * widthScale;
+    let mappedY = sourceY * depthScale;
+
+    if (useStraightBox) {
+      const absX = Math.abs(sourceX);
+      const absY = Math.abs(sourceY);
+      if (absX > 0.0001 || absY > 0.0001) {
+        const edgeScale = Math.min(
+          absX > 0.0001 ? halfW / absX : Infinity,
+          absY > 0.0001 ? halfD / absY : Infinity
+        );
+        mappedX = sourceX * edgeScale;
+        mappedY = sourceY * edgeScale;
+      } else {
+        mappedX = halfW;
+        mappedY = 0;
+      }
+    }
+
+    const mappedZ = scaleReferenceCylinderZ(point.z, baseHeight, reference.height);
+    const profileScale = getProfileScaleAtZ(mappedZ, params);
+
+    return {
+      x: destinationCenterX + mappedX * profileScale,
+      y: destinationCenterY + mappedY * profileScale,
+      z: mappedZ,
+    };
+  };
+
+  return referenceCubeA104Gcode
+    .split(/\r?\n/)
+    .map((line) => {
+      if (line.includes("; ===== begin model =====")) {
+        inModel = true;
+        return line;
+      }
+      if (line.includes("; ===== End sequence =====")) {
+        const mappedPosition = mapPoint(position);
+        const extensionLines = getExtensionGcodeLines(
+          getCopiedTopExtensionPoints(transformedModelPoints, params, destinationCenterX, destinationCenterY),
+          mappedPosition,
+          params,
+          "Copied top cube extension"
+        );
+        inModel = false;
+        inEndSequence = true;
+        safetyContext.inEndSequence = true;
+        return extensionLines.length ? `${extensionLines.join("\n")}\n${line}` : line;
+      }
+      if (/^; max_z_height:/.test(line)) {
+        return `; max_z_height: ${fixed(targetHeight, 2)}`;
+      }
+      if (inModel && /^; Z_HEIGHT:/.test(line)) {
+        const match = line.match(/-?\d+(?:\.\d+)?/);
+        return match
+          ? `; Z_HEIGHT: ${fixed(scaleReferenceCylinderZ(Number(match[0]), baseHeight, reference.height), 3)}`
+          : line;
+      }
+      if (inEndSequence && /^G1 Z43\.50 F900/.test(line)) {
+        return `G1 Z${fixed(Math.min(250, targetHeight + 5), 2)} F900`;
+      }
+      if (inEndSequence && /^G1 Z143\.00 F600/.test(line)) {
+        return `G1 Z${fixed(Math.min(250, targetHeight + 100), 2)} F600`;
+      }
+      if (!inModel) return rewriteReferenceSafetyLine(line, params, safetyContext);
+      if (!/^G[01]\s/.test(line)) return line;
+
+      const words = {};
+      line.replace(/([XYZEF])(-?\d+(?:\.\d+)?)/g, (match, key, value) => {
+        words[key.toLowerCase()] = Number(value);
+        return match;
+      });
+      const next = {
+        x: Number.isFinite(words.x) ? words.x : position.x,
+        y: Number.isFinite(words.y) ? words.y : position.y,
+        z: Number.isFinite(words.z) ? words.z : position.z,
+      };
+      const mappedNext = mapPoint(next);
+      const mappedPosition = mapPoint(position);
+      const sourceDistance = getPointDistance(position, next);
+      const mappedDistance = getPointDistance(mappedPosition, mappedNext);
+      const extrusionScale = sourceDistance > 0.000001 ? mappedDistance / sourceDistance : 1;
+      const hasPositiveExtrusion = Number.isFinite(words.e) && words.e > 0;
+
+      if (hasPositiveExtrusion) {
+        const planarDistance = Math.hypot(mappedNext.x - mappedPosition.x, mappedNext.y - mappedPosition.y);
+        const zDelta = mappedNext.z - mappedPosition.z;
+        const strokeType = planarDistance < 0.05 && zDelta > 0 ? "up" : zDelta < 0 ? "down" : "reference";
+        if (!transformedModelPoints.length) transformedModelPoints.push({ ...mappedPosition, strokeType });
+        transformedModelPoints.push({ ...mappedNext, strokeType });
+      }
+
+      let transformed = line.replace(/([XYZ])(-?\d+(?:\.\d+)?)/g, (match, key) => {
+        if (key === "X") return `X${fixed(mappedNext.x, 3)}`;
+        if (key === "Y") return `Y${fixed(mappedNext.y, 3)}`;
+        if (key === "Z") return `Z${fixed(mappedNext.z, 3)}`;
+        return match;
+      });
+      transformed = rewriteReferenceMotionLine(transformed, params, mappedNext.z, extrusionScale);
+      position = next;
+      return transformed;
+    })
+    .join("\n");
+}
+
+function getScaledReferenceCubeA104Data(params = state) {
+  const targetWidth = getCubeTargetWidth(params);
+  const targetDepth = getCubeTargetDepth(params);
+  const targetHeight = Math.max(REFERENCE_CYLINDER_FIRST_LAYER_Z, getProfileTargetHeight(params));
+  const cacheKey = [
+    fixed(targetWidth, 3),
+    fixed(targetDepth, 3),
+    fixed(targetHeight, 3),
+    params.cubeStraightMode === true ? "straight" : "woven",
+    getProfileCacheKey(params),
+  ].join(":");
+  if (scaledReferenceCubeA104Cache && scaledReferenceCubeA104CacheKey === cacheKey) {
+    return scaledReferenceCubeA104Cache;
+  }
+
+  const transformedGcode = transformReferenceCubeA104Gcode({
+    ...params,
+    originX: REFERENCE_CYLINDER_CENTER_X,
+    originY: REFERENCE_CYLINDER_CENTER_Y,
+    solidWidth: targetWidth,
+    solidDepth: targetDepth,
+  });
+  scaledReferenceCubeA104Cache = parseReferenceA104Data(transformedGcode, "referenceCube04");
+  scaledReferenceCubeA104CacheKey = cacheKey;
+  return scaledReferenceCubeA104Cache;
+}
+
+function getReferenceA104DataForFormFactor(formFactor, params = state) {
+  if (formFactor === "cylinder") return getScaledReferenceCylinderA104Data(params);
+  if (formFactor === "cube") return getScaledReferenceCubeA104Data(params);
   return null;
 }
 
-function getReferenceA104Result(formFactor) {
-  const reference = getReferenceA104DataForFormFactor(formFactor);
+function getReferenceA104Result(formFactor, params = state) {
+  const originX = getReferenceNumber(params, "originX", state.originX, 0, 250);
+  const originY = getReferenceNumber(params, "originY", state.originY, 0, 250);
+  const usesDefaultOrigin =
+    Math.abs(originX - REFERENCE_CYLINDER_CENTER_X) < 0.001 &&
+    Math.abs(originY - REFERENCE_CYLINDER_CENTER_Y) < 0.001;
+  const reference = usesDefaultOrigin
+    ? getReferenceA104DataForFormFactor(formFactor, params)
+    : formFactor === "cylinder"
+      ? parseReferenceA104Data(transformReferenceCylinderA104Gcode(params, { useMachineOrigin: true }), "referenceCylinder04")
+      : formFactor === "cube"
+        ? parseReferenceA104Data(transformReferenceCubeA104Gcode(params), "referenceCube04")
+        : getReferenceA104DataForFormFactor(formFactor, params);
   if (!reference) return null;
+  const filamentArea = Math.PI * (params.filamentDiameter / 2) ** 2;
+  const estimatedWeight = (reference.totalExtrusion * filamentArea * params.filamentDensity) / 1000;
   return {
     text: reference.text,
     totalExtrusion: reference.totalExtrusion,
     totalMoves: reference.totalMoves,
-    estimatedWeight: reference.estimatedWeight,
+    estimatedWeight,
     estimatedTime: reference.estimatedTime,
   };
 }
@@ -834,13 +1468,12 @@ function isSolidFormFactor(params) {
 
 function getSolidLayerCount(params) {
   const layerHeight = Math.max(0.05, params.layerHeight || state.layerHeight);
-  const solidHeight = Math.max(layerHeight, params.solidHeight || state.solidHeight);
+  const solidHeight = getSolidTargetHeight(params);
   return Math.max(1, Math.ceil(solidHeight / layerHeight));
 }
 
 function getSolidTargetHeight(params) {
-  const layerHeight = Math.max(0.05, params.layerHeight || state.layerHeight);
-  return Math.max(layerHeight, params.solidHeight || state.solidHeight);
+  return getProfileTargetHeight(params);
 }
 
 function getSolidZ(params, layerIndex, layerProgress) {
@@ -851,7 +1484,7 @@ function getSolidZ(params, layerIndex, layerProgress) {
 
 function generateSolidToolpaths(params) {
   if (params.formFactor === "cylinder") {
-    const reference = getReferenceCylinderA104Data();
+    const reference = getScaledReferenceCylinderA104Data(params);
     if (reference) return reference.paths;
     if (isUltraWeavePreset(params)) {
       return generateCylinderSpiralToolpaths(params);
@@ -860,7 +1493,7 @@ function generateSolidToolpaths(params) {
   }
 
   if (params.formFactor === "cube") {
-    const reference = getReferenceCubeA104Data();
+    const reference = getScaledReferenceCubeA104Data(params);
     if (reference) return reference.paths;
     return generateCubeToolpaths(params);
   }
@@ -1170,8 +1803,8 @@ function generateCylinderSpiralToolpaths(params) {
 }
 
 function generateCubeToolpaths(params) {
-  const solidWidth = Math.max(1, params.solidWidth || state.solidWidth);
-  const solidDepth = Math.max(1, params.solidDepth || state.solidDepth);
+  const solidWidth = getCubeTargetWidth(params);
+  const solidDepth = getCubeTargetDepth(params);
   const perimeter = (solidWidth + solidDepth) * 2;
   const solidHeight = getSolidTargetHeight(params);
   return createSolidSurfacePatternPaths(
@@ -1208,7 +1841,7 @@ function projectPreviewPoint(point, path, pointIndex, params, centerX, centerY, 
     const isoX = (point.x - point.y) * Math.cos(Math.PI / 6);
     const isSolidPoint = params.formFactor === "cylinder" || params.formFactor === "cube";
     const zHeight = isSolidPoint && Number.isFinite(point.z) ? point.z : getPreviewZHeight(point, path, pointIndex, params);
-    const zWeight = isSolidPoint ? 12 : 24;
+    const zWeight = isSolidPoint ? 1 : 24;
     const isoY = (point.x + point.y) * Math.sin(Math.PI / 6) - zHeight * zWeight;
     return applyPreviewTransform(centerX + isoX * scale, centerY + isoY * scale, centerX, centerY);
   }
@@ -1220,6 +1853,12 @@ function getFormFactorName(formFactor) {
   if (formFactor === "cylinder") return "원통 세로 직조 조형";
   if (formFactor === "cube") return "육면체 외벽 조형";
   return "평면판";
+}
+
+function getSolidDisplayName(params = state) {
+  if (params.formFactor === "cylinder" && params.cylinderStraightMode) return "일자 원통 조형";
+  if (params.formFactor === "cube" && params.cubeStraightMode) return "일자 육면체 조형";
+  return getFormFactorName(params.formFactor);
 }
 
 function projectSolidPoint(point, params, centerX, centerY, scale) {
@@ -1237,8 +1876,8 @@ function getSolidFootprintPoints(params) {
     return points;
   }
 
-  const solidWidth = Math.max(1, params.solidWidth || state.solidWidth);
-  const solidDepth = Math.max(1, params.solidDepth || state.solidDepth);
+  const solidWidth = getCubeTargetWidth(params);
+  const solidDepth = getCubeTargetDepth(params);
   const halfW = solidWidth / 2;
   const halfD = solidDepth / 2;
   return [
@@ -1265,7 +1904,9 @@ function getCylinderPreviewLiftRatio(point) {
 }
 
 function drawCylinderPreviewPath(path, centerX, centerY, scale, stride, params = state) {
-  const sampledPoints = path.points.filter((point, index) => index % stride === 0 || index === path.points.length - 1);
+  const sampledPoints = path.points.filter(
+    (point, index) => point.breakBefore || index % stride === 0 || index === path.points.length - 1
+  );
   if (sampledPoints.length < 2) return;
 
   ctx.lineCap = "round";
@@ -1274,6 +1915,8 @@ function drawCylinderPreviewPath(path, centerX, centerY, scale, stride, params =
   for (let index = 1; index < sampledPoints.length; index += 1) {
     const prevPoint = sampledPoints[index - 1];
     const nextPoint = sampledPoints[index];
+    if (nextPoint.breakBefore) continue;
+
     const prevProjected = projectPreviewPoint(prevPoint, path, index - 1, params, centerX, centerY, scale);
     const nextProjected = projectPreviewPoint(nextPoint, path, index, params, centerX, centerY, scale);
     const liftRatio = (getCylinderPreviewLiftRatio(prevPoint) + getCylinderPreviewLiftRatio(nextPoint)) / 2;
@@ -1321,7 +1964,7 @@ function drawCylinderPreviewPath(path, centerX, centerY, scale, stride, params =
 
 function drawSolidPreviewScene(width, height) {
   const margin = 38;
-  const reference = getReferenceA104DataForFormFactor(state.formFactor);
+  const reference = getReferenceA104DataForFormFactor(state.formFactor, state);
   const previewParams = reference
     ? {
         ...state,
@@ -1329,21 +1972,31 @@ function drawSolidPreviewScene(width, height) {
         solidWidth: reference.width,
         solidDepth: reference.depth,
         solidHeight: reference.height,
+        profileIsBaked: true,
       }
     : state;
-  const footprintSize =
+  const actualWidth =
     state.formFactor === "cylinder"
-      ? Math.max(1, previewParams.solidRadius) * 2 + previewParams.nozzleDiameter * 6
-      : Math.hypot(Math.max(1, state.solidWidth), Math.max(1, state.solidDepth));
-  const projectedWidth = state.viewMode === "iso" ? footprintSize * Math.cos(Math.PI / 6) * 2 : footprintSize;
-  const zPreviewWeight = state.viewMode === "iso" ? 12 : 1;
+      ? Math.max(1, previewParams.solidRadius) * 2
+      : Math.max(1, getCubeTargetWidth(previewParams), getCubeTargetDepth(previewParams));
+  const actualHeight = getSolidTargetHeight(previewParams);
+  const physicalScale = Math.min((width - margin * 2) / actualWidth, (height - margin * 2) / actualHeight);
+  const projectedFootprintSpan =
+    state.formFactor === "cylinder"
+      ? actualWidth * Math.SQRT2
+      : getCubeTargetWidth(previewParams) + getCubeTargetDepth(previewParams);
+  const projectedWidth =
+    state.viewMode === "iso" ? projectedFootprintSpan * Math.cos(Math.PI / 6) : actualWidth;
   const projectedHeight =
-    state.viewMode === "iso" ? footprintSize * Math.sin(Math.PI / 6) + getSolidTargetHeight(previewParams) * zPreviewWeight : footprintSize;
-  const scale = Math.min((width - margin * 2) / projectedWidth, (height - margin * 2) / projectedHeight) * 0.88;
+    state.viewMode === "iso" ? projectedFootprintSpan * Math.sin(Math.PI / 6) + actualHeight : actualWidth;
+  const projectionFitScale = Math.min(
+    (width - margin * 2) / projectedWidth,
+    (height - margin * 2) / projectedHeight
+  );
+  const scale = (state.viewMode === "iso" ? Math.min(physicalScale, projectionFitScale) : projectionFitScale) * 0.88;
   const centerX = width / 2;
-  const centerY =
-    state.viewMode === "iso" ? height / 2 + getSolidTargetHeight(previewParams) * zPreviewWeight * scale * 0.42 : height / 2;
-  const paths = generateSolidToolpaths(previewParams);
+  const centerY = state.viewMode === "iso" ? height / 2 + actualHeight * scale * 0.5 : height / 2;
+  const paths = reference ? reference.paths : generateSolidToolpaths(previewParams);
   const stats = getStats(paths);
   const footprint = getSolidFootprintPoints(previewParams);
 
@@ -1359,7 +2012,9 @@ function drawSolidPreviewScene(width, height) {
   ctx.stroke();
 
   if (state.viewMode === "iso") {
-    const top = footprint.map((point) => ({ ...point, z: getSolidTargetHeight(previewParams) }));
+    const topZ = getSolidTargetHeight(previewParams);
+    const topProfileScale = getProfileScaleAtZ(topZ, previewParams);
+    const top = footprint.map((point) => ({ ...point, x: point.x * topProfileScale, y: point.y * topProfileScale, z: topZ }));
     ctx.beginPath();
     top.forEach((point, index) => {
       const projected = projectSolidPoint(point, previewParams, centerX, centerY, scale);
@@ -1371,7 +2026,11 @@ function drawSolidPreviewScene(width, height) {
   }
 
   paths.forEach((path, index) => {
-    const stride = Math.max(1, Math.floor(path.points.length / 9000));
+    const previewSampleBudget =
+      state.formFactor === "cylinder" || path.family === "referenceCube04" || path.family === "referenceCylinder04"
+        ? 30000
+        : 9000;
+    const stride = Math.max(1, Math.floor(path.points.length / previewSampleBudget));
     if (state.formFactor === "cylinder" || path.family === "referenceCube04") {
       drawCylinderPreviewPath(path, centerX, centerY, scale, stride, previewParams);
       return;
@@ -1393,13 +2052,14 @@ function drawSolidPreviewScene(width, height) {
 
   ctx.fillStyle = "#111";
   ctx.font = "12px ui-sans-serif, system-ui";
+  const solidDisplayName = getSolidDisplayName(previewParams);
   const solidLabel = reference
-    ? `Reference A1 0.4 ${state.formFactor === "cube" ? "Cube" : "Cylinder"} / ${reference.totalMoves} exact moves / H ${fixed(reference.height, 1)} mm`
+    ? `${solidDisplayName} / Reference A1 0.4 ${state.formFactor === "cube" ? "Cube" : "Cylinder"} / ${reference.totalMoves} exact moves / H ${fixed(reference.height, 1)} mm`
     : state.formFactor === "cylinder"
       ? isUltraWeavePreset(state)
-        ? `${getFormFactorName(state.formFactor)} / continuous spiral / ${getCylinderSpiralTurnCount(state)} turns`
-        : `${getFormFactorName(state.formFactor)} / ${paths.length} layers / ${getCylinderColumnCount(state)} columns`
-      : `${getFormFactorName(state.formFactor)} / ${patternNames[state.patternMode]} / H ${fixed(getSolidTargetHeight(state), 1)} mm`;
+        ? `${solidDisplayName} / continuous spiral / ${getCylinderSpiralTurnCount(state)} turns`
+        : `${solidDisplayName} / ${paths.length} layers / ${getCylinderColumnCount(state)} columns`
+      : `${solidDisplayName} / ${patternNames[state.patternMode]} / H ${fixed(getSolidTargetHeight(state), 1)} mm`;
   ctx.fillText(
     solidLabel,
     margin,
@@ -1408,12 +2068,12 @@ function drawSolidPreviewScene(width, height) {
   ctx.restore();
 
   patternTitle.textContent = reference
-    ? `${getFormFactorName(state.formFactor)} · 원본 G-code 0.4 ${state.formFactor === "cube" ? "정사각 투영" : "변환"}`
+    ? `${solidDisplayName} · 원본 G-code 0.4 ${state.formFactor === "cube" ? "정사각 투영" : "변환"}`
     : state.formFactor === "cylinder"
       ? isUltraWeavePreset(state)
-        ? `${getFormFactorName(state.formFactor)} · 연속 나선 직조`
-        : getFormFactorName(state.formFactor)
-      : `${getFormFactorName(state.formFactor)} · ${patternNames[state.patternMode]}`;
+        ? `${solidDisplayName} · 연속 나선 직조`
+        : solidDisplayName
+      : `${solidDisplayName} · ${patternNames[state.patternMode]}`;
   pathCount.textContent = `${paths.length} paths`;
   lineLength.textContent = `${Math.round(stats.length)} mm`;
 }
@@ -1548,10 +2208,10 @@ function getStartMacro(params) {
     `M140 S${fixed(params.bedTemp, 0)} ; set bed temperature`,
     `M104 S${fixed(params.nozzleTemp, 0)} ; set nozzle temperature`,
     `M190 S${fixed(params.bedTemp, 0)} ; wait for bed`,
-    `M109 S${fixed(params.nozzleTemp, 0)} ; final nozzle temperature check`,
     "G90 ; absolute positioning",
     "M83 ; relative extrusion",
     "G28 ; home all axes",
+    `M109 S${fixed(params.nozzleTemp, 0)} ; final nozzle temperature check`,
     "G92 E0",
     `G1 Z${fixed(params.layerHeight)} F600`,
   ];
@@ -1798,7 +2458,7 @@ function getSolidFootprintSummary(params) {
     return `Cylinder R${fixed(params.solidRadius, 1)} x H${fixed(getSolidTargetHeight(params), 1)} mm`;
   }
 
-  return `Cube ${fixed(params.solidWidth, 1)} x ${fixed(params.solidDepth, 1)} x ${fixed(getSolidTargetHeight(params), 1)} mm`;
+  return `Cube ${fixed(getCubeTargetWidth(params), 1)} x ${fixed(getCubeTargetDepth(params), 1)} x ${fixed(getSolidTargetHeight(params), 1)} mm`;
 }
 
 function getCylinderBodyFlowScale(point, params) {
@@ -2031,7 +2691,7 @@ function generateSolidGcode(params) {
 
 function generateGcode(params) {
   if (params.formFactor === "cylinder" || params.formFactor === "cube") {
-    const referenceResult = getReferenceA104Result(params.formFactor);
+    const referenceResult = getReferenceA104Result(params.formFactor, params);
     if (referenceResult) return referenceResult;
   }
 
@@ -2175,6 +2835,7 @@ function updateGcode() {
 
 function render() {
   syncTotalHeightStep();
+  syncProfileExtensionLimit();
   drawPreview();
   updateGcode();
 }
@@ -2197,7 +2858,28 @@ function syncTotalHeightStep() {
   });
 }
 
+function syncProfileExtensionLimit() {
+  const maxExtension = getProfileExtensionMaxHeight(state);
+  if (state.profileExtensionHeight > maxExtension) {
+    state.profileExtensionHeight = maxExtension;
+  }
+
+  document.querySelectorAll('[data-param="profileExtensionHeight"]').forEach((input) => {
+    input.setAttribute("max", fixed(maxExtension, 0));
+    input.value = fixed(state.profileExtensionHeight, 0);
+  });
+}
+
+function invalidateReferencePreviewCache() {
+  scaledReferenceCylinderA104Cache = null;
+  scaledReferenceCylinderA104CacheKey = "";
+  scaledReferenceCubeA104Cache = null;
+  scaledReferenceCubeA104CacheKey = "";
+}
+
 function syncParamInputs(name, value) {
+  if (!name || value === undefined || value === null) return;
+
   document.querySelectorAll(`[data-param="${name}"]`).forEach((input) => {
     if (input.type === "checkbox") {
       input.checked = Boolean(value);
@@ -2232,9 +2914,21 @@ function syncHeightParams(changedParam) {
   }
 }
 
+function normalizeParamValue(name, value) {
+  if (name === "solidRadius") return clamp(value, 10, 120);
+  if (name === "solidHeight") return clamp(value, 5, 220);
+  if (name === "solidWidth" || name === "solidDepth") return clamp(value, 20, 180);
+  if (name === "solidWeavePitchScale") return clamp(value, 0.5, 1);
+  if (name === "profileExtensionHeight") return clamp(value, 0, getProfileExtensionMaxHeight(state));
+  if (name === "profileTaperHeight") return clamp(value, 5, 160);
+  if (name === "profileTaperScale") return clamp(value, 0.25, 1);
+  return value;
+}
+
 function handleParamInput(event) {
   const input = event.target;
   const name = input.dataset.param;
+  if (!name) return;
 
   if (name === "formFactor") {
     setFormFactor(input.value);
@@ -2245,6 +2939,7 @@ function handleParamInput(event) {
   if (input.type === "checkbox") {
     state[name] = input.checked;
     syncParamInputs(name, state[name]);
+    invalidateReferencePreviewCache();
     render();
     return;
   }
@@ -2252,9 +2947,11 @@ function handleParamInput(event) {
   const value = Number(input.value);
   if (!Number.isFinite(value)) return;
 
-  state[name] = value;
-  syncParamInputs(name, value);
+  const normalizedValue = normalizeParamValue(name, value);
+  state[name] = normalizedValue;
+  syncParamInputs(name, normalizedValue);
   syncHeightParams(name);
+  invalidateReferencePreviewCache();
 
   render();
 }
